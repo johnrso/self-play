@@ -1,5 +1,6 @@
 mujoco-py<2.1,>=2.0
 gym
-dm-control
+dm_control
+dm2gym
 torch
 wandb
