@@ -102,4 +102,24 @@ class MLPActorCritic(nn.Module):
 
     def __init__(self, obs_space, act_space, hidden_sizes=(64, 64), activation=nn.Tanh):
         super().__init__()
+        obs_dim = obs_space.shape[0]
 
+        if isinstance(act_space, Box):
+            self.pi = MLPGaussianActor(obs_dim, action_space.shape[0], 
+                                       hidden_sizes, activation)
+        if isinstance(act_space, Discrete):
+            self.pi = MLPCategoricalActor(obs_dim, action_space.n,
+                                          hidden_sizes, activation)
+
+        self.v = MLPCritic(obs_dim, hidden_sizes, activation)
+
+    def step(self, obs):
+        with torch.no_grad():
+            dist = self.pi._policy(obs)
+            action = dist.sample()
+            logp = self.pi._log_prob(pi, action)
+            value = self.v(obs)
+        return action.numpy(), value.numpy(), logp.numpy()
+        
+    def act(self, obs):
+        return self.step(obs)[0] 
