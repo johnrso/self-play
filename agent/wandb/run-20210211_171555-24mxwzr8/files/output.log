@@ -1,0 +1,14 @@
+Warning: Log dir /Users/kiranganeshan/self-play/agent/data/ppo/ppo_s0 already exists! Storing info there anyway.
+[32;1mLogging data to /Users/kiranganeshan/self-play/agent/data/ppo/ppo_s0/progress.txt[0m
+/opt/anaconda3/envs/spinningup/lib/python3.6/site-packages/gym/logger.py:30: UserWarning: [33mWARN: Box bound precision lowered by casting to float32[0m
+  warnings.warn(colorize('%s: %s'%('WARN', msg % args), 'yellow'))
+(12,)
+[32;1m
+Number of parameters: 	 pi: 10008, 	 v: 9281
+[0m
+Traceback (most recent call last):
+  File "ppo.py", line 447, in <module>
+    task_name=args.task_name)
+  File "ppo.py", line 312, in ppo
+    action_norm = env.action_space.max - env.action_space.min
+AttributeError: 'Box' object has no attribute 'max'

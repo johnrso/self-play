@@ -1,0 +1,49 @@
+Warning: Log dir /Users/kiranganeshan/self-play/agent/data/ppo/ppo_s0 already exists! Storing info there anyway.
+[32;1mLogging data to /Users/kiranganeshan/self-play/agent/data/ppo/ppo_s0/progress.txt[0m
+WARNING:absl:mjbindings failed to import mjlib and other functions. libmujoco.so may not be accessible.
+Traceback (most recent call last):
+  File "ppo.py", line 446, in <module>
+    task_name=args.task_name)
+  File "ppo.py", line 214, in ppo
+    env = env_fn()
+  File "ppo.py", line 430, in <lambda>
+    seed=args.seed),
+  File "/opt/anaconda3/envs/spinningup/lib/python3.6/site-packages/dmc2gym/__init__.py", line 52, in make
+    return gym.make(env_id)
+  File "/opt/anaconda3/envs/spinningup/lib/python3.6/site-packages/gym/envs/registration.py", line 156, in make
+    return registry.make(id, **kwargs)
+  File "/opt/anaconda3/envs/spinningup/lib/python3.6/site-packages/gym/envs/registration.py", line 101, in make
+    env = spec.make(**kwargs)
+  File "/opt/anaconda3/envs/spinningup/lib/python3.6/site-packages/gym/envs/registration.py", line 72, in make
+    cls = load(self.entry_point)
+  File "/opt/anaconda3/envs/spinningup/lib/python3.6/site-packages/gym/envs/registration.py", line 17, in load
+    mod = importlib.import_module(mod_name)
+  File "/opt/anaconda3/envs/spinningup/lib/python3.6/importlib/__init__.py", line 126, in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+  File "<frozen importlib._bootstrap>", line 994, in _gcd_import
+  File "<frozen importlib._bootstrap>", line 971, in _find_and_load
+  File "<frozen importlib._bootstrap>", line 955, in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 665, in _load_unlocked
+  File "<frozen importlib._bootstrap_external>", line 678, in exec_module
+  File "<frozen importlib._bootstrap>", line 219, in _call_with_frames_removed
+  File "/opt/anaconda3/envs/spinningup/lib/python3.6/site-packages/dmc2gym/wrappers.py", line 2, in <module>
+    from dm_control import suite
+  File "/opt/anaconda3/envs/spinningup/lib/python3.6/site-packages/dm_control/suite/__init__.py", line 28, in <module>
+    from dm_control.suite import acrobot
+  File "/opt/anaconda3/envs/spinningup/lib/python3.6/site-packages/dm_control/suite/acrobot.py", line 24, in <module>
+    from dm_control import mujoco
+  File "/opt/anaconda3/envs/spinningup/lib/python3.6/site-packages/dm_control/mujoco/__init__.py", line 18, in <module>
+    from dm_control.mujoco.engine import action_spec
+  File "/opt/anaconda3/envs/spinningup/lib/python3.6/site-packages/dm_control/mujoco/engine.py", line 45, in <module>
+    from dm_control.mujoco import index
+  File "/opt/anaconda3/envs/spinningup/lib/python3.6/site-packages/dm_control/mujoco/index.py", line 92, in <module>
+    from dm_control.mujoco.wrapper import util
+  File "/opt/anaconda3/envs/spinningup/lib/python3.6/site-packages/dm_control/mujoco/wrapper/__init__.py", line 25, in <module>
+    from dm_control.mujoco.wrapper.core import callback_context
+  File "/opt/anaconda3/envs/spinningup/lib/python3.6/site-packages/dm_control/mujoco/wrapper/core.py", line 32, in <module>
+    from dm_control.mujoco.wrapper.mjbindings import functions
+  File "/opt/anaconda3/envs/spinningup/lib/python3.6/site-packages/dm_control/mujoco/wrapper/mjbindings/functions.py", line 21, in <module>
+    mjlib = util.get_mjlib()
+  File "/opt/anaconda3/envs/spinningup/lib/python3.6/site-packages/dm_control/mujoco/wrapper/util.py", line 124, in get_mjlib
+    raise OSError("Cannot find MuJoCo library at {}.".format(library_path))
+OSError: Cannot find MuJoCo library at /Users/kiranganeshan/.mujoco/mujoco200_macos/bin/libmujoco200.dylib.

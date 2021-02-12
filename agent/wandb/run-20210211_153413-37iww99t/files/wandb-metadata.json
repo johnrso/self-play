@@ -1,0 +1,22 @@
+{
+    "os": "Darwin-18.7.0-x86_64-i386-64bit",
+    "python": "3.6.12",
+    "heartbeatAt": "2021-02-11T23:34:15.208516",
+    "startedAt": "2021-02-11T23:34:13.016157",
+    "docker": null,
+    "cpu_count": 8,
+    "cuda": null,
+    "args": [],
+    "state": "running",
+    "codePath": "agent/ppo.py",
+    "program": "ppo.py",
+    "git": {
+        "remote": "http://github.com/johnrso/self-play",
+        "commit": "b369065732d372126522f958c546d986024167eb"
+    },
+    "email": "kg23@berkeley.edu",
+    "root": "/Users/kiranganeshan/self-play",
+    "host": "MacBook-Pro-8.local",
+    "username": "kiranganeshan",
+    "executable": "/opt/anaconda3/envs/spinningup/bin/python3"
+}
