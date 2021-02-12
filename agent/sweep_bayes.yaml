@@ -1,0 +1,24 @@
+program: ppo.py
+method: bayes
+metric:
+  name: AverageEpRet
+  goal: maximize
+parameters:
+  gamma:
+    min: 0.99
+    max: 0.999
+  clip_ratio:
+    min: .15
+    max: .25
+  pi_lr:
+    min: 0.0001
+    max: 0.0005
+  vf_lr:
+    min: 0.0001
+    max: 0.002
+  lam:
+    min: .96
+    max: .99
+  target_kl:
+    min: 0.005
+    max: 0.02
