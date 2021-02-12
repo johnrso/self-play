@@ -10,7 +10,7 @@ import spinup
 import gym
 import os
 
-def main(env):
+def main(env, agent):
     spinup.ppo_pytorch(env)
 
 if __name__ == '__main__':
@@ -30,5 +30,5 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     env = suite.load(domain_name=parser.domain_name, task_name=args.task_name)
-    core.AC
-    main()
+    agent = core.MLPSquashActorCritic
+    main(env, agent)
