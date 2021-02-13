@@ -215,7 +215,7 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
     eval_env = env_fn()
     obs_dim = env.observation_space.shape
     act_dim = env.action_space.shape
-    print(act_dim)
+
     # Create actor-critic module
     ac = actor_critic(env.observation_space, env.action_space, **ac_kwargs)
 
@@ -309,8 +309,9 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
     for epoch in range(epochs):
         for t in range(local_steps_per_epoch):
             a, v, logp = ac.step(torch.as_tensor(o, dtype=torch.float32))
-            action_norm = env.action_space.max - env.action_space.min
-            a = (a - env.action_space.min) / action_norm
+            action_norm = env.action_space.high - env.action_space.low
+            a = 2 * np.divide(a - env.action_space.low, action_norm) - 1
+            print(a)
             next_o, r, d, _ = env.step(a)
             ep_ret += r
             ep_len += 1
