@@ -407,15 +407,24 @@ def ppo(env_fn,
         logger.log_tabular('Time', time.time()-start_time)
         logger.dump_tabular()
 
+def parse_boolean(arg):
+    arg = str(arg).upper()
+    if 'TRUE'.startswith(arg):
+        return True
+    elif 'FALSE'.startswith(arg):
+        return False
+    else:
+        pass
+
 if __name__ == '__main__':
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument('--env', type=str, default='CartPole-v1')
     parser.add_argument('--domain_name', type=str, default='quadruped')
     parser.add_argument('--task_name', type=str, default='run')
-    parser.add_argument('--dmc', type=bool, default=True)
-    parser.add_argument('--sweep', type=bool, default=True)
-    parser.add_argument('--video', type=bool, default=False)
+    parser.add_argument('--dmc', type=parse_boolean, default=True)
+    parser.add_argument('--sweep', type=parse_boolean, default=True)
+    parser.add_argument('--video', type=parse_boolean, default=False)
     parser.add_argument('--hid', type=int, default=64)
     parser.add_argument('--l', type=int, default=2)
 
@@ -434,7 +443,8 @@ if __name__ == '__main__':
     parser.add_argument('--target_kl', type=float, default=0.01)
 
     args = parser.parse_args()
-
+    print(args.dmc)
+    print(args.video)
     mpi_fork(args.cpu)  # run parallel code with mpi
 
     from spinup.utils.run_utils import setup_logger_kwargs
@@ -462,6 +472,7 @@ if __name__ == '__main__':
             domain_name=args.domain_name,
             task_name=args.task_name)
     else:
+        print("using gym env")
         ppo(lambda : gym.make(args.env), 
             actor_critic=core.MLPActorCritic,
             ac_kwargs=dict(hidden_sizes=[args.hid]*args.l), 
@@ -474,8 +485,8 @@ if __name__ == '__main__':
             seed=args.seed, 
             steps_per_epoch=args.steps, 
             epochs=args.epochs,
-            logger_kwargs=logger_kwarg,
-            sweep=args.sweeps,
+            logger_kwargs=logger_kwargs,
+            sweep=args.sweep,
             video=args.video,
-            domain_name=domain_name,
-            task_name=task_name)
+            domain_name=args.domain_name,
+            task_name=args.task_name)

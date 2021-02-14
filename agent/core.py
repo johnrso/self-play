@@ -142,13 +142,14 @@ class MLPActorCritic(nn.Module):
         super().__init__()
 
         obs_dim = observation_space.shape[0]
-        assert len(action_space.shape) == 1, "multidimensional action space shape \
-                                              not supported by MLPGaussianActor"
+
 
         # Gather action space limits, create lob prob correction funcs, use Gaussian Actor
         # if action space is Box
         if isinstance(action_space, Box):
-            
+            self.is_discrete = False
+            err_str = "multidimensional action space shape not supported by MLPGaussianActor"
+            assert len(action_space.shape) == 1, err_str
             # Use action space bounds to get coord-wise mappings from raw actor output
             # to action space, and corrections to log probabilities as a func of action
             self.action_limits = zip(action_space.low, action_space.high)
@@ -169,7 +170,7 @@ class MLPActorCritic(nn.Module):
                 else:
                     self.action_maps += [lambda x: low + (high - low) * (np.tanh(x) + 1) / 2]
                     correction_maps += [lambda x: closed_correction(x, high, low)]
-
+    
             # Build Policy (pass in corrections to log probs as lambdas taking action)
             self.pi = MLPGaussianActor(obs_dim, 
                                        action_space.shape[0], 
@@ -179,6 +180,7 @@ class MLPActorCritic(nn.Module):
         
         # Use Categorical Actor if action space is Discrete
         elif isinstance(action_space, Discrete):
+            self.is_discrete = True
             self.pi = MLPCategoricalActor(obs_dim, action_space.n, hidden_sizes, activation)
 
         # build value function
@@ -192,7 +194,8 @@ class MLPActorCritic(nn.Module):
             else:
                 a = pi.sample()
             logp_a = self.pi._log_prob_from_distribution(pi, a)
-            a = [amap(el) for amap, el in zip(self.action_maps, a)]
+            if not self.is_discrete:
+                a = [amap(el) for amap, el in zip(self.action_maps, a)]
             v = self.v(obs)
         return np.array(a), v.numpy(), logp_a.numpy()
         
