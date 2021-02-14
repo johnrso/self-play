@@ -2,6 +2,7 @@ import numpy as np
 import torch
 from torch.optim import Adam, lr_scheduler
 import gym
+from gym.spaces import Discrete, Box
 import time
 import core as core
 
@@ -91,11 +92,27 @@ class PPOBuffer:
 
 
 
-def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
-        steps_per_epoch=4000, epochs=50, gamma=0.99, clip_ratio=0.2, pi_lr=3e-4,
-        vf_lr=1e-3, train_pi_iters=80, train_v_iters=80, lam=0.97, max_ep_len=1000,
-        target_kl=0.01, logger_kwargs=dict(), save_freq=50,sweep=True,
-        video=False,domain_name='cartpole',task_name='balance'):
+def ppo(env_fn, 
+        actor_critic=core.MLPActorCritic, 
+        ac_kwargs=dict(), 
+        seed=0,
+        steps_per_epoch=4000, 
+        epochs=50, 
+        gamma=0.99, 
+        clip_ratio=0.2, 
+        pi_lr=3e-4,
+        vf_lr=1e-3, 
+        train_pi_iters=80, 
+        train_v_iters=80, 
+        lam=0.97, 
+        max_ep_len=1000,
+        target_kl=0.01, 
+        logger_kwargs=dict(), 
+        save_freq=50,
+        sweep=True,
+        video=False,
+        domain_name='cartpole',
+        task_name='balance'):
     """
     Proximal Policy Optimization (by clipping),
     with early stopping based on approximate KL
@@ -309,9 +326,6 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
     for epoch in range(epochs):
         for t in range(local_steps_per_epoch):
             a, v, logp = ac.step(torch.as_tensor(o, dtype=torch.float32))
-            action_norm = env.action_space.high - env.action_space.low
-            a = 2 * np.divide(a - env.action_space.low, action_norm) - 1
-            print(a)
             next_o, r, d, _ = env.step(a)
             ep_ret += r
             ep_len += 1
@@ -347,7 +361,7 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 
         # Save model & evaluate
         if (epoch % save_freq == 0) or (epoch == epochs-1):
-            logger.save_state({'env': env}, None)
+#            logger.save_state({'env': env}, None)
 
             if proc_id()==0:
                 # eval rollout
@@ -355,7 +369,7 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
                 frames = []
                 print('Evaluating and generating video')
                 for i in range(max_ep_len):
-                    a = ac.act(torch.as_tensor(o, dtype=torch.float32),deterministic=True)
+                    a = ac.act(torch.as_tensor(o, dtype=torch.float32))
                     next_o, r, d, _ = eval_env.step(a)
                     o = next_o
                     eval_ep_ret += r

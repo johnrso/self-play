@@ -1,7 +1,7 @@
 import numpy as np
 import scipy.signal
 from gym.spaces import Box, Discrete
-
+from enum import Enum
 import torch
 import torch.nn as nn
 from torch.distributions.normal import Normal
@@ -79,26 +79,40 @@ class MLPCategoricalActor(Actor):
     def _log_prob_from_distribution(self, pi, act):
         return pi.log_prob(act)
 
+LOG_STD_MAX = 2
+LOG_STD_MIN = -20
 
 class MLPGaussianActor(Actor):
 
-    def __init__(self, obs_dim, act_dim, hidden_sizes, activation):
+    def __init__(self, 
+                 obs_dim, 
+                 act_dim, 
+                 hidden_sizes, 
+                 activation, 
+                 logprob_corrections, 
+                 dim_rand=1):
         super().__init__()
-        log_std = -0.5 * np.ones(act_dim, dtype=np.float32)
-        self.log_std = torch.nn.Parameter(torch.as_tensor(log_std))
-        self.mu_net = mlp([obs_dim] + list(hidden_sizes) + [act_dim], activation)
 
+        
+        # Initialize Gaussian Parameters and Network Architecture
+        log_std = -0.5 * np.ones(act_dim, dtype=np.float32)
+        self.base_net = mlp([obs_dim] + list(hidden_sizes), activation)
+        self.corrections = logprob_corrections
+        assert len(self.corrections) == act_dim
+        self.mu_layer = nn.Linear(hidden_sizes[-1], act_dim)
+        self.log_layer = nn.Linear(hidden_sizes[-1], pow(act_dim, dim_rand))
+        
     def _distribution(self, obs):
-        mu = self.mu_net(obs)
-        std = torch.exp(self.log_std)
+        mu = self.mu_layer(self.base_net(obs))
+        log_std = self.log_layer(self.base_net(obs))
+        std = torch.exp(torch.clamp(log_std, LOG_STD_MIN, LOG_STD_MAX))
         return Normal(mu, std)
 
-    def _deterministic(self,obs):
-        mu = self.mu_net(obs)
-        return mu
-
     def _log_prob_from_distribution(self, pi, act):
-        return pi.log_prob(act).sum(axis=-1)    
+        logp_pi = pi.log_prob(act).sum(axis=-1)
+        act = [torch.tensor(x) for x in act.tolist()]
+        logp_pi -= sum([corr(a) for a, corr in zip(act, self.corrections)])
+        return logp_pi
         # Last axis sum needed for Torch Normal distribution
 
 
@@ -116,15 +130,50 @@ class MLPCritic(nn.Module):
 class MLPActorCritic(nn.Module):
 
 
-    def __init__(self, observation_space, action_space, 
-                 hidden_sizes=(64,64), activation=nn.Tanh):
+    def __init__(self, 
+                 observation_space, 
+                 action_space, 
+                 hidden_sizes=(64,64), 
+                 activation=nn.Tanh):
         super().__init__()
 
         obs_dim = observation_space.shape[0]
+        assert len(action_space.shape) == 1, "multidimensional action space shape \
+                                              not supported by MLPGaussianActor"
 
-        # policy builder depends on action space
+        # Gather action space limits, create lob prob correction funcs, use Gaussian Actor
+        # if action space is Box
         if isinstance(action_space, Box):
-            self.pi = MLPGaussianActor(obs_dim, action_space.shape[0], hidden_sizes, activation)
+            
+            # Use action space bounds to get coord-wise mappings from raw actor output
+            # to action space, and corrections to log probabilities as a func of action
+            self.action_limits = zip(action_space.low, action_space.high)
+            low_open, high_open = lambda l: l == float('-inf'), lambda h: h == float('inf')
+            self.action_maps = []
+            correction_maps = []
+            closed_correction = lambda x, h, l: 2 * (x + F.softplus(x)) - np.log(2 * (h - l))
+            for low, high in self.action_limits:
+                if low_open(low) and high_open(high):
+                    self.action_maps += [nn.Identity]
+                    correction_maps += [lambda x: 0]
+                elif low_open(low):
+                    self.action_maps += [lambda x: high - np.exp(x)]
+                    correction_maps += [lambda x: -x]
+                elif high_open(high):
+                    self.action_maps += [lambda x: low + np.exp(x)]
+                    correciton_maps += [lambda x: -x]
+                else:
+                    self.action_maps += [lambda x: low + (high - low) * (np.tanh(x) + 1) / 2]
+                    correction_maps += [lambda x: closed_correction(x, high, low)]
+
+            # Build Policy (pass in corrections to log probs as lambdas taking action)
+            self.pi = MLPGaussianActor(obs_dim, 
+                                       action_space.shape[0], 
+                                       hidden_sizes, 
+                                       activation, 
+                                       correction_maps)
+        
+        # Use Categorical Actor if action space is Discrete
         elif isinstance(action_space, Discrete):
             self.pi = MLPCategoricalActor(obs_dim, action_space.n, hidden_sizes, activation)
 
@@ -139,19 +188,19 @@ class MLPActorCritic(nn.Module):
             else:
                 a = pi.sample()
             logp_a = self.pi._log_prob_from_distribution(pi, a)
+            a = [amap(el) for amap, el in zip(self.action_maps, a)]
             v = self.v(obs)
-        return a.numpy(), v.numpy(), logp_a.numpy()
+        return np.array(a), v.numpy(), logp_a.numpy()
         
-    def act(self, obs, deterministic=False):
-        return self.step(obs, deterministic)[0]
+    def act(self, obs):
+        return self.step(obs, deterministic=True)[0]
 
 
 ##########
 # Squash
 ##########
 
-LOG_STD_MAX = 2
-LOG_STD_MIN = -20
+
 
 
 
