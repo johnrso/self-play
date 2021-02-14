@@ -378,6 +378,7 @@ def ppo(env_fn,
                         frames.append(img)
 
                 if args.video:
+                    print("logging video")
                     # log video frames
                     video = np.transpose(np.array(frames),(0,3,1,2))[::4,...]
                     wandb.log({"video": wandb.Video(video, fps=30, format="gif")},

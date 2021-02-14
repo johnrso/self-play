@@ -109,11 +109,15 @@ class MLPGaussianActor(Actor):
         return Normal(mu, std)
 
     def _log_prob_from_distribution(self, pi, act):
+        # Last axis sum needed for Torch Distribution
         logp_pi = pi.log_prob(act).sum(axis=-1)
-        act = [torch.tensor(x) for x in act.tolist()]
-        logp_pi -= sum([corr(a) for a, corr in zip(act, self.corrections)])
+        
+        # Move action space dimension to front
+        act = torch.squeeze(torch.transpose(torch.unsqueeze(act, 0), 0, -1), -1)
+
+        # Make coordinate-wise adjustment to log prob
+        logp_pi -= sum([corr(a) for a, corr in zip([x for x in act], self.corrections)])
         return logp_pi
-        # Last axis sum needed for Torch Normal distribution
 
 
 class MLPCritic(nn.Module):
