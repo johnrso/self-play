@@ -2,6 +2,7 @@ import numpy as np
 import torch
 from torch.optim import Adam, lr_scheduler
 import gym
+from gym.spaces import Discrete, Box
 import time
 import core as core
 
@@ -9,6 +10,7 @@ from utils.logx import EpochLogger
 from utils.mpi_pytorch import setup_pytorch_for_mpi, sync_params, mpi_avg_grads
 from utils.mpi_tools import mpi_fork, mpi_avg, proc_id, mpi_statistics_scalar, num_procs
 import dmc2gym
+from dmc2gym.wrappers import DMCWrapper
 import os
 import wandb
 
@@ -91,11 +93,27 @@ class PPOBuffer:
 
 
 
-def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
-        steps_per_epoch=4000, epochs=50, gamma=0.99, clip_ratio=0.2, pi_lr=3e-4,
-        vf_lr=1e-3, train_pi_iters=80, train_v_iters=80, lam=0.97, max_ep_len=1000,
-        target_kl=0.01, logger_kwargs=dict(), save_freq=50,sweep=True,
-        video=False,domain_name='cartpole',task_name='balance'):
+def ppo(env_fn, 
+        actor_critic=core.MLPActorCritic, 
+        ac_kwargs=dict(), 
+        seed=0,
+        steps_per_epoch=4000, 
+        epochs=50, 
+        gamma=0.99, 
+        clip_ratio=0.2, 
+        pi_lr=3e-4,
+        vf_lr=1e-3, 
+        train_pi_iters=80, 
+        train_v_iters=80, 
+        lam=0.97, 
+        max_ep_len=1000,
+        target_kl=0.01, 
+        logger_kwargs=dict(), 
+        save_freq=50,
+        sweep=True,
+        video=False,
+        domain_name='cartpole',
+        task_name='balance'):
     """
     Proximal Policy Optimization (by clipping),
     with early stopping based on approximate KL
@@ -215,7 +233,7 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
     eval_env = env_fn()
     obs_dim = env.observation_space.shape
     act_dim = env.action_space.shape
-    print(act_dim)
+
     # Create actor-critic module
     ac = actor_critic(env.observation_space, env.action_space, **ac_kwargs)
 
@@ -309,8 +327,6 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
     for epoch in range(epochs):
         for t in range(local_steps_per_epoch):
             a, v, logp = ac.step(torch.as_tensor(o, dtype=torch.float32))
-            action_norm = env.action_space.max - env.action_space.min
-            a = (a - env.action_space.min) / action_norm
             next_o, r, d, _ = env.step(a)
             ep_ret += r
             ep_len += 1
@@ -346,23 +362,26 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 
         # Save model & evaluate
         if (epoch % save_freq == 0) or (epoch == epochs-1):
-            logger.save_state({'env': env}, None)
-
             if proc_id()==0:
                 # eval rollout
                 o, eval_ep_ret, _ = eval_env.reset(), 0, 0
                 frames = []
                 print('Evaluating and generating video')
                 for i in range(max_ep_len):
-                    a = ac.act(torch.as_tensor(o, dtype=torch.float32),deterministic=True)
+                    a = ac.act(torch.as_tensor(o, dtype=torch.float32))
                     next_o, r, d, _ = eval_env.step(a)
                     o = next_o
                     eval_ep_ret += r
-                    img = eval_env.render(mode='rgb_array',width=256,height=256)
+                    kwargs = dict()
+                    if isinstance(eval_env, DMCWrapper):
+                        kwargs['width'] = 256
+                        kwargs['height'] = 256
+                    img = eval_env.render(mode='rgb_array', **kwargs)
                     if args.video:
                         frames.append(img)
 
                 if args.video:
+                    print("logging video")
                     # log video frames
                     video = np.transpose(np.array(frames),(0,3,1,2))[::4,...]
                     wandb.log({"video": wandb.Video(video, fps=30, format="gif")},
@@ -391,15 +410,24 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         logger.log_tabular('Time', time.time()-start_time)
         logger.dump_tabular()
 
+def parse_boolean(arg):
+    arg = str(arg).upper()
+    if 'TRUE'.startswith(arg):
+        return True
+    elif 'FALSE'.startswith(arg):
+        return False
+    else:
+        pass
+
 if __name__ == '__main__':
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument('--env', type=str, default='CartPole-v1')
     parser.add_argument('--domain_name', type=str, default='quadruped')
     parser.add_argument('--task_name', type=str, default='run')
-    parser.add_argument('--dmc', type=bool, default=True)
-    parser.add_argument('--sweep', type=bool, default=True)
-    parser.add_argument('--video', type=bool, default=False)
+    parser.add_argument('--dmc', type=parse_boolean, default=True)
+    parser.add_argument('--sweep', type=parse_boolean, default=True)
+    parser.add_argument('--video', type=parse_boolean, default=False)
     parser.add_argument('--hid', type=int, default=64)
     parser.add_argument('--l', type=int, default=2)
 
@@ -418,7 +446,8 @@ if __name__ == '__main__':
     parser.add_argument('--target_kl', type=float, default=0.01)
 
     args = parser.parse_args()
-
+    print(args.dmc)
+    print(args.video)
     mpi_fork(args.cpu)  # run parallel code with mpi
 
     from spinup.utils.run_utils import setup_logger_kwargs
@@ -446,6 +475,7 @@ if __name__ == '__main__':
             domain_name=args.domain_name,
             task_name=args.task_name)
     else:
+        print("using gym env")
         ppo(lambda : gym.make(args.env), 
             actor_critic=core.MLPActorCritic,
             ac_kwargs=dict(hidden_sizes=[args.hid]*args.l), 
@@ -458,8 +488,8 @@ if __name__ == '__main__':
             seed=args.seed, 
             steps_per_epoch=args.steps, 
             epochs=args.epochs,
-            logger_kwargs=logger_kwarg,
-            sweep=args.sweeps,
+            logger_kwargs=logger_kwargs,
+            sweep=args.sweep,
             video=args.video,
-            domain_name=domain_name,
-            task_name=task_name)
+            domain_name=args.domain_name,
+            task_name=args.task_name)

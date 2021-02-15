@@ -31,6 +31,7 @@ gym==0.15.7
 h5py==2.10.0
 idna==2.10
 imageio==2.9.0
+imageio-ffmpeg==0.4.3
 importlib-metadata==3.4.0
 iniconfig==1.1.1
 ipykernel==5.3.4
@@ -47,6 +48,7 @@ labmaze==1.0.3
 lxml==4.6.2
 Markdown==3.3.3
 matplotlib==3.1.1
+moviepy==1.0.3
 mpi4py==3.0.3
 mujoco-py==2.0.2.13
 numpy==1.18.5
@@ -60,6 +62,7 @@ pexpect==4.8.0
 pickleshare==0.7.5
 Pillow==8.1.0
 pluggy==0.13.1
+proglog==0.1.9
 promise==2.3
 prompt-toolkit==3.0.8
 protobuf==3.14.0
