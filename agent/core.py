@@ -116,7 +116,7 @@ class MLPGaussianActor(Actor):
         act = torch.squeeze(torch.transpose(torch.unsqueeze(act, 0), 0, -1), -1)
 
         # Make coordinate-wise adjustment to log prob
-        logp_pi -= sum([corr(a) for a, corr in zip([x for x in act], self.corrections)])
+        logp_pi += sum([corr(a) for a, corr in zip([x for x in act], self.corrections)])
         return logp_pi
 
 
@@ -156,20 +156,23 @@ class MLPActorCritic(nn.Module):
             low_open, high_open = lambda l: l == float('-inf'), lambda h: h == float('inf')
             self.action_maps = []
             correction_maps = []
-            closed_correction = lambda x, h, l: 2 * (x + F.softplus(x)) - np.log(2 * (h - l))
             for low, high in self.action_limits:
+                zero_func, inv_func = lambda x: 0, lambda x: -x
+                above_func, below_func = lambda x: high - np.exp(x), lambda x: low + np.exp(x)
+                squash_func = lambda x: low + (high - low) * (np.tanh(x) + 1) / 2
+                closed_func = lambda x: 2 * (x + F.softplus(-2 * x)) - np.log(2 * (high - low))
                 if low_open(low) and high_open(high):
                     self.action_maps += [nn.Identity]
-                    correction_maps += [lambda x: 0]
+                    correction_maps += [zero_func]
                 elif low_open(low):
-                    self.action_maps += [lambda x: high - np.exp(x)]
-                    correction_maps += [lambda x: -x]
+                    self.action_maps += [above_func]
+                    correction_maps += [inv_func]
                 elif high_open(high):
-                    self.action_maps += [lambda x: low + np.exp(x)]
-                    correciton_maps += [lambda x: -x]
+                    self.action_maps += [below_func]
+                    correction_maps += [inv_func]
                 else:
-                    self.action_maps += [lambda x: low + (high - low) * (np.tanh(x) + 1) / 2]
-                    correction_maps += [lambda x: closed_correction(x, high, low)]
+                    self.action_maps += [squash_func]
+                    correction_maps += [closed_func]
     
             # Build Policy (pass in corrections to log probs as lambdas taking action)
             self.pi = MLPGaussianActor(obs_dim, 
@@ -189,8 +192,11 @@ class MLPActorCritic(nn.Module):
     def step(self, obs, deterministic=False):
         with torch.no_grad():
             pi = self.pi._distribution(obs)
-            if deterministic:
+            if deterministic and not self.is_discrete:
                 a = pi.mean
+            elif deterministic and self.is_discrete:
+                values = pi.enumerate_support()
+                a = values[torch.argmax(torch.tensor([pi.log_prob(act) for act in values]))]
             else:
                 a = pi.sample()
             logp_a = self.pi._log_prob_from_distribution(pi, a)

@@ -10,6 +10,7 @@ from utils.logx import EpochLogger
 from utils.mpi_pytorch import setup_pytorch_for_mpi, sync_params, mpi_avg_grads
 from utils.mpi_tools import mpi_fork, mpi_avg, proc_id, mpi_statistics_scalar, num_procs
 import dmc2gym
+from dmc2gym.wrappers import DMCWrapper
 import os
 import wandb
 
@@ -361,8 +362,6 @@ def ppo(env_fn,
 
         # Save model & evaluate
         if (epoch % save_freq == 0) or (epoch == epochs-1):
-#            logger.save_state({'env': env}, None)
-
             if proc_id()==0:
                 # eval rollout
                 o, eval_ep_ret, _ = eval_env.reset(), 0, 0
@@ -373,7 +372,11 @@ def ppo(env_fn,
                     next_o, r, d, _ = eval_env.step(a)
                     o = next_o
                     eval_ep_ret += r
-                    img = eval_env.render(mode='rgb_array',width=256,height=256)
+                    kwargs = dict()
+                    if isinstance(eval_env, DMCWrapper):
+                        kwargs['width'] = 256
+                        kwargs['height'] = 256
+                    img = eval_env.render(mode='rgb_array', **kwargs)
                     if args.video:
                         frames.append(img)
 
