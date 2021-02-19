@@ -89,34 +89,42 @@ class MLPGaussianActor(Actor):
                  act_dim, 
                  hidden_sizes, 
                  activation, 
-                 logprob_corrections, 
-                 dim_rand=1):
+                 **kwargs):
         super().__init__()
 
         
         # Initialize Gaussian Parameters and Network Architecture
-        log_std = -0.5 * np.ones(act_dim, dtype=np.float32)
+        self.act_dim = act_dim
         self.base_net = mlp([obs_dim] + list(hidden_sizes), activation)
         self.corrections = logprob_corrections
         assert len(self.corrections) == act_dim
         self.mu_layer = nn.Linear(hidden_sizes[-1], act_dim)
         self.log_layer = nn.Linear(hidden_sizes[-1], pow(act_dim, dim_rand))
-        
+        self.has_masks = False
+        if 'closed_mask' in kwargs:
+            self.has_masks = True
+            self.closed_mask = kwargs['closed_mask']
+            assert 'half_open_mask' in kwargs and 'correction' in kwargs
+            self.half_open_mask = kwargs['half_open_mask']
+            self.closed_bound_correction = kwargs['correction']
+       
     def _distribution(self, obs):
         mu = self.mu_layer(self.base_net(obs))
         log_std = self.log_layer(self.base_net(obs))
         std = torch.exp(torch.clamp(log_std, LOG_STD_MIN, LOG_STD_MAX))
-        return Normal(mu, std)
+        return Normal(mu, torch.reshape(std, (self.act_dim,)))
 
     def _log_prob_from_distribution(self, pi, act):
         # Last axis sum needed for Torch Distribution
         logp_pi = pi.log_prob(act).sum(axis=-1)
-        
-        # Move action space dimension to front
-        act = torch.squeeze(torch.transpose(torch.unsqueeze(act, 0), 0, -1), -1)
-
+       
         # Make coordinate-wise adjustment to log prob
-        logp_pi += sum([corr(a) for a, corr in zip([x for x in act], self.corrections)])
+        if self.has_masks:
+            # corr = -log(2 * (high - low)) is the non-action-dependent term
+            # in the logp correction for closed interval action space dimensions
+            corr = self.closed_bound_correction
+            logp_pi += (2 * (act + F.softmax(-2 * act) + corr) * self.closed_mask).sum(axis=-1)
+            logp_pi -= (act * self.half_open_mask).sum(axis=-1)
         return logp_pi
 
 
@@ -129,7 +137,36 @@ class MLPCritic(nn.Module):
     def forward(self, obs):
         return torch.squeeze(self.v_net(obs), -1) # Critical to ensure v has right shape.
 
-
+def mask_constructor(action_space):
+    action_limits = zip(action_space.low, action_space.high)
+    low_open, high_open = lambda l: l == float('-inf'), lambda h: h == float('inf')
+    closed_mask, open_above_mask, open_below_mask = [], [], []
+    for low, high in action_limits:
+        closed_func = lambda x: 2 * (x + F.softplus(-2 * x)) - np.log(2 * (high - low))
+        # For two-sided limits, we need both limit bounds to calculate logp diff.
+        # Function _log_prob_from_distribution needs correction in the form of:
+        # 2 * (a + F.softplus(-2 * a)) - np.log(2 * (high - low))
+        # Where a is (pre-squashed) action and high and low are action space bounds.
+        # The second term here is supplied to the Actor as a 'correction' tensor in kwargs,
+        # And a mask of fully closed action dimensions is passed to calculate first term.
+        if not low_open(low) and not high_open(high):
+            closed_mask += [1]
+            open_above_mask += [0]
+            open_below_mask += [0]
+        # For one-sided limits, logp diff is always just -a, where a is the presquashed action.
+        # The sum of the open_above and open_below masks is given to the Actor as mask
+        # for this logp correction. Masks are kept separate for action-mapping purposes.
+        elif not high_open(high) or not low_open(low):
+            closed_mask += [0]
+            open_above_mask += [1 if high_open(high) else 0]
+            open_below_mask += [1 if low_open(low) else 0]
+        # Fully open action dimensions require no action-mapping or logp correction.
+        else
+            closed_mask += [0]
+            open_above_mask += [0]
+            open_below_mask += [0]
+    return torch.as_tensor(el) for el in [closed_mask, open_above_mask, open_below_mask]
+    
 
 class MLPActorCritic(nn.Module):
 
@@ -150,36 +187,21 @@ class MLPActorCritic(nn.Module):
             self.is_discrete = False
             err_str = "multidimensional action space shape not supported by MLPGaussianActor"
             assert len(action_space.shape) == 1, err_str
-            # Use action space bounds to get coord-wise mappings from raw actor output
-            # to action space, and corrections to log probabilities as a func of action
-            self.action_limits = zip(action_space.low, action_space.high)
-            low_open, high_open = lambda l: l == float('-inf'), lambda h: h == float('inf')
-            self.action_maps = []
-            correction_maps = []
-            for low, high in self.action_limits:
-                zero_func, inv_func = lambda x: 0, lambda x: -x
-                above_func, below_func = lambda x: high - np.exp(x), lambda x: low + np.exp(x)
-                squash_func = lambda x: low + (high - low) * (np.tanh(x) + 1) / 2
-                closed_func = lambda x: 2 * (x + F.softplus(-2 * x)) - np.log(2 * (high - low))
-                if low_open(low) and high_open(high):
-                    self.action_maps += [nn.Identity]
-                    correction_maps += [zero_func]
-                elif low_open(low):
-                    self.action_maps += [above_func]
-                    correction_maps += [inv_func]
-                elif high_open(high):
-                    self.action_maps += [below_func]
-                    correction_maps += [inv_func]
-                else:
-                    self.action_maps += [squash_func]
-                    correction_maps += [closed_func]
-    
+
+            # Get action space bounds and masks specifying closed and half-open dims
+            self.lows, self.highs = np.array(action_space.low), np.array(action_space.high)
+            self.lows = np.nan_to_num(self.lows, neginf=0, posinf=0) 
+            self.highs = np.nan_to_num(self.highs, neginf=0, posinf=0)
+            self.closed, self.open_above, self.open_below = mask_constructor(action_space)
+
             # Build Policy (pass in corrections to log probs as lambdas taking action)
             self.pi = MLPGaussianActor(obs_dim, 
                                        action_space.shape[0], 
                                        hidden_sizes, 
                                        activation, 
-                                       correction_maps)
+                                       {'closed_mask': self.closed,
+                                       'half_open_mask': self.open_above + self.open_below,
+                                       'correction': -torch.log(2 * (self.highs - self.lows))})
         
         # Use Categorical Actor if action space is Discrete
         elif isinstance(action_space, Discrete):
@@ -201,7 +223,11 @@ class MLPActorCritic(nn.Module):
                 a = pi.sample()
             logp_a = self.pi._log_prob_from_distribution(pi, a)
             if not self.is_discrete:
-                a = [amap(el) for amap, el in zip(self.action_maps, a)]
+                # Map actions to squashed action space using masks generated in __init__.
+                a, lows, highs = np.array(a), np.array(self.lows), np.array(self.highs)
+                a = a + self.closed * (-a + lows + (highs - lows) * (tanh(a) + 1) / 2)
+                a = a + self.open_above * (-a + lows + np.exp(a))
+                a = a + self.open_below * (-a + highs - np.exp(a)) 
             v = self.v(obs)
         return np.array(a), v.numpy(), logp_a.numpy()
         
@@ -209,85 +235,3 @@ class MLPActorCritic(nn.Module):
         return self.step(obs, deterministic=True)[0]
 
 
-##########
-# Squash
-##########
-
-
-
-
-
-class SquashedGaussianMLPActor(Actor):
-
-    def __init__(self, obs_dim, act_dim, hidden_sizes, activation, act_limits):
-        super().__init__()
-        self.net = mlp([obs_dim] + list(hidden_sizes), activation, activation)
-        self.mu_layer = nn.Linear(hidden_sizes[-1], act_dim)
-        self.log_std_layer = nn.Linear(hidden_sizes[-1], act_dim)
-        self.act_limits = act_limits
-
-    def _distribution(self, obs):
-        net_out = self.net(obs)
-        mu = self.mu_layer(net_out)
-        log_std = self.log_std_layer(net_out)
-        log_std = torch.clamp(log_std, LOG_STD_MIN, LOG_STD_MAX)
-        std = torch.exp(log_std)
-        return Normal(mu, std)
-
-    def _log_prob_from_distribution(self, pi, act):
-        logp_pi = pi.log_prob(act).sum(axis=-1)
-        # Compute logprob from Gaussian, and then apply correction for Tanh squashing.
-        # NOTE: The correction formula is a little bit magic. To get an understanding 
-        # of where it comes from, check out the original SAC paper (arXiv 1801.01290) 
-        # and look in appendix C. This is a more numerically-stable equivalent to Eq 21.
-        # Try deriving it yourself as a (very difficult) exercise. :)
-        logp_pi -= (2*(np.log(2) - act - F.softplus(-2*act))).sum(axis=-1)
-        return logp_pi    # Last axis sum needed for Torch Normal distribution
-
-
-    def old_forward(self, obs, deterministic=False, with_logprob=True):
-        # Pre-squash distribution and sample
-        pi_distribution = self._distribution(obs)
-        pi_action = mu if deterministic else pi_distribution.rsample()
-        logp_pi = pi._log_prob_from_distribution(pi_action) if with_logprob else None
-        pi_action = torch.tanh(pi_action)
-        delta = (self.act_limits[1] - self.act_limits[0]) / 2
-        pi_action = self.act_limits[0] + delta * (pi_action + 1)
-        return pi_action, logp_pi
-
-
-class MLPSquashActorCritic(nn.Module):
-
-    def __init__(self, observation_space, action_space, hidden_sizes=(256,256),
-                 activation=nn.ReLU):
-        super().__init__()
-
-        obs_dim = observation_space.shape[0]
-        act_dim = action_space.shape[0]
-        self.act_limits = (action_space.low, action_space.high)
-
-
-        # build policy and value functions
-        self.pi = SquashedGaussianMLPActor(obs_dim, 
-                                           act_dim, 
-                                           hidden_sizes, 
-                                           activation, 
-                                           self.act_limits)
-        self.v  = MLPCritic(obs_dim, hidden_sizes, activation)
-
-    def act(self, obs):
-        return self.step(obs)[0]
-
-    def step(self, obs):
-        with torch.no_grad():
-            pi = self.pi._distribution(obs)
-            a = pi.rsample()
-            logp_a = self.pi._log_prob_from_distribution(pi, a)
-            delta = (self.act_limits[0] - self.act_limits[1]) / 2
-            a = self.act_limits[0] + delta * (torch.tanh(a) + 1)
-            v = self.v(obs)
-        return a.numpy(), v.numpy(), logp_a.numpy()
-        
-##########
-# Squash
-########## 
