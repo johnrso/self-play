@@ -18,7 +18,7 @@ class Actor(nn.Module):
         raise NotImplementedError
 
     def forward(self, obs, act=None):
-        # Produce action distributions for given observations, and 
+        # Produce action distributions for given observations, and
         # optionally compute the log likelihood of given actions under
         # those distributions.
         pi = self._distribution(obs)
@@ -50,13 +50,13 @@ def count_vars(module):
 def discount_cumsum(x, discount):
     """
     magic from rllab for computing discounted cumulative sums of vectors.
-    input: 
-        vector x, 
-        [x0, 
-         x1, 
+    input:
+        vector x,
+        [x0,
+         x1,
          x2]
     output:
-        [x0 + discount * x1 + discount^2 * x2,  
+        [x0 + discount * x1 + discount^2 * x2,
          x1 + discount * x2,
          x2]
     """
@@ -67,7 +67,7 @@ def discount_cumsum(x, discount):
 
 
 class MLPCategoricalActor(Actor):
-    
+
     def __init__(self, obs_dim, act_dim, hidden_sizes, activation):
         super().__init__()
         self.logits_net = mlp([obs_dim] + list(hidden_sizes) + [act_dim], activation)
@@ -84,15 +84,15 @@ LOG_STD_MIN = -20
 
 class MLPGaussianActor(Actor):
 
-    def __init__(self, 
-                 obs_dim, 
-                 act_dim, 
-                 hidden_sizes, 
-                 activation, 
+    def __init__(self,
+                 obs_dim,
+                 act_dim,
+                 hidden_sizes,
+                 activation,
                  **kwargs):
         super().__init__()
 
-        
+
         # Initialize Gaussian Parameters and Network Architecture
         self.act_dim = act_dim
         self.base_net = mlp([obs_dim] + list(hidden_sizes), activation)
@@ -107,7 +107,7 @@ class MLPGaussianActor(Actor):
             assert 'half_open_mask' in kwargs and 'correction' in kwargs
             self.half_open_mask = kwargs['half_open_mask']
             self.closed_bound_correction = kwargs['correction']
-       
+
     def _distribution(self, obs):
         mu = self.mu_layer(self.base_net(obs))
         log_std = self.log_layer(self.base_net(obs))
@@ -117,7 +117,7 @@ class MLPGaussianActor(Actor):
     def _log_prob_from_distribution(self, pi, act):
         # Last axis sum needed for Torch Distribution
         logp_pi = pi.log_prob(act).sum(axis=-1)
-       
+
         # Make coordinate-wise adjustment to log prob
         if self.has_masks:
             # corr = -log(2 * (high - low)) is the non-action-dependent term
@@ -166,15 +166,15 @@ def mask_constructor(action_space):
             open_above_mask += [0]
             open_below_mask += [0]
     return torch.as_tensor(el) for el in [closed_mask, open_above_mask, open_below_mask]
-    
+
 
 class MLPActorCritic(nn.Module):
 
 
-    def __init__(self, 
-                 observation_space, 
-                 action_space, 
-                 hidden_sizes=(64,64), 
+    def __init__(self,
+                 observation_space,
+                 action_space,
+                 hidden_sizes=(64,64),
                  activation=nn.Tanh):
         super().__init__()
 
@@ -190,19 +190,19 @@ class MLPActorCritic(nn.Module):
 
             # Get action space bounds and masks specifying closed and half-open dims
             self.lows, self.highs = np.array(action_space.low), np.array(action_space.high)
-            self.lows = np.nan_to_num(self.lows, neginf=0, posinf=0) 
+            self.lows = np.nan_to_num(self.lows, neginf=0, posinf=0)
             self.highs = np.nan_to_num(self.highs, neginf=0, posinf=0)
             self.closed, self.open_above, self.open_below = mask_constructor(action_space)
 
             # Build Policy (pass in corrections to log probs as lambdas taking action)
-            self.pi = MLPGaussianActor(obs_dim, 
-                                       action_space.shape[0], 
-                                       hidden_sizes, 
-                                       activation, 
+            self.pi = MLPGaussianActor(obs_dim,
+                                       action_space.shape[0],
+                                       hidden_sizes,
+                                       activation,
                                        {'closed_mask': self.closed,
                                        'half_open_mask': self.open_above + self.open_below,
                                        'correction': -torch.log(2 * (self.highs - self.lows))})
-        
+
         # Use Categorical Actor if action space is Discrete
         elif isinstance(action_space, Discrete):
             self.is_discrete = True
@@ -227,11 +227,9 @@ class MLPActorCritic(nn.Module):
                 a, lows, highs = np.array(a), np.array(self.lows), np.array(self.highs)
                 a = a + self.closed * (-a + lows + (highs - lows) * (tanh(a) + 1) / 2)
                 a = a + self.open_above * (-a + lows + np.exp(a))
-                a = a + self.open_below * (-a + highs - np.exp(a)) 
+                a = a + self.open_below * (-a + highs - np.exp(a))
             v = self.v(obs)
         return np.array(a), v.numpy(), logp_a.numpy()
-        
+
     def act(self, obs):
         return self.step(obs, deterministic=True)[0]
-
-
