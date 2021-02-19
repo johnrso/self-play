@@ -190,8 +190,8 @@ class MLPActorCritic(nn.Module):
 
             # Get action space bounds and masks specifying closed and half-open dims
             self.lows, self.highs = np.array(action_space.low), np.array(action_space.high)
-            self.lows = np.nan_to_num(self.lows, neginf=0, posinf=0)
-            self.highs = np.nan_to_num(self.highs, neginf=0, posinf=0)
+            self.lows = torch.as_tensor(np.nan_to_num(self.lows, neginf=0, posinf=0))
+            self.highs = torch.as_tensor(np.nan_to_num(self.highs, neginf=0, posinf=0))
             self.closed, self.open_above, self.open_below = mask_constructor(action_space)
 
             # Build Policy (pass in corrections to log probs as lambdas taking action)
@@ -224,7 +224,7 @@ class MLPActorCritic(nn.Module):
             logp_a = self.pi._log_prob_from_distribution(pi, a)
             if not self.is_discrete:
                 # Map actions to squashed action space using masks generated in __init__.
-                a, lows, highs = np.array(a), np.array(self.lows), np.array(self.highs)
+                lows, highs = self.lows, self.highs
                 a = a + self.closed * (-a + lows + (highs - lows) * (tanh(a) + 1) / 2)
                 a = a + self.open_above * (-a + lows + np.exp(a))
                 a = a + self.open_below * (-a + highs - np.exp(a))
