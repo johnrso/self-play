@@ -93,23 +93,23 @@ class PPOBuffer:
 
 
 
-def ppo(env_fn, 
-        actor_critic=core.MLPActorCritic, 
-        ac_kwargs=dict(), 
+def ppo(env_fn,
+        actor_critic=core.MLPActorCritic,
+        ac_kwargs=dict(),
         seed=0,
-        steps_per_epoch=4000, 
-        epochs=50, 
-        gamma=0.99, 
-        clip_ratio=0.2, 
+        steps_per_epoch=4000,
+        epochs=50,
+        gamma=0.99,
+        clip_ratio=0.2,
         pi_lr=3e-4,
-        vf_lr=1e-3, 
-        train_pi_iters=80, 
-        train_v_iters=80, 
-        lam=0.97, 
+        vf_lr=1e-3,
+        train_pi_iters=80,
+        train_v_iters=80,
+        lam=0.97,
         max_ep_len=1000,
-        target_kl=0.01, 
-        logger_kwargs=dict(), 
-        save_freq=50,
+        target_kl=0.01,
+        logger_kwargs=dict(),
+        save_freq=25,
         sweep=True,
         video=False,
         domain_name='cartpole',
@@ -195,11 +195,11 @@ def ppo(env_fn,
     setup_pytorch_for_mpi()
 
     if proc_id() == 0:
-        hyperparameter_defaults = dict(gamma=gamma, 
-                                       clip_ratio=clip_ratio, 
-                                       pi_lr=pi_lr, 
-                                       vf_lr=vf_lr, 
-                                       lam=lam, 
+        hyperparameter_defaults = dict(gamma=gamma,
+                                       clip_ratio=clip_ratio,
+                                       pi_lr=pi_lr,
+                                       vf_lr=vf_lr,
+                                       lam=lam,
                                        target_kl=target_kl)
 
         if args.sweep:
@@ -344,7 +344,7 @@ def ppo(env_fn,
 
             if terminal or epoch_ended:
                 if epoch_ended and not(terminal):
-                    print('Warning: trajectory cut off by epoch at %d steps.'%ep_len, 
+                    print('Warning: trajectory cut off by epoch at %d steps.'%ep_len,
                           flush=True)
                 # if trajectory didn't reach terminal state, bootstrap value target
                 if timeout or epoch_ended:
@@ -427,7 +427,7 @@ if __name__ == '__main__':
     parser.add_argument('--task_name', type=str, default='run')
     parser.add_argument('--dmc', type=parse_boolean, default=True)
     parser.add_argument('--sweep', type=parse_boolean, default=True)
-    parser.add_argument('--video', type=parse_boolean, default=False)
+    parser.add_argument('--video', type=parse_boolean, default=True)
     parser.add_argument('--hid', type=int, default=64)
     parser.add_argument('--l', type=int, default=2)
 
@@ -455,19 +455,19 @@ if __name__ == '__main__':
 
 
     if args.dmc:
-        ppo(lambda : dmc2gym.make(domain_name=args.domain_name, 
-                                  task_name=args.task_name, 
+        ppo(lambda : dmc2gym.make(domain_name=args.domain_name,
+                                  task_name=args.task_name,
                                   seed=args.seed),
             actor_critic=core.MLPActorCritic,
-            ac_kwargs=dict(hidden_sizes=[args.hid]*args.l), 
+            ac_kwargs=dict(hidden_sizes=[args.hid]*args.l),
             gamma=args.gamma,
             clip_ratio=args.clip_ratio,
             pi_lr=args.pi_lr,
             vf_lr=args.vf_lr,
             lam=args.lam,
             target_kl=args.target_kl,
-            seed=args.seed, 
-            steps_per_epoch=args.steps, 
+            seed=args.seed,
+            steps_per_epoch=args.steps,
             epochs=args.epochs,
             logger_kwargs=logger_kwargs,
             sweep=args.sweep,
@@ -476,17 +476,17 @@ if __name__ == '__main__':
             task_name=args.task_name)
     else:
         print("using gym env")
-        ppo(lambda : gym.make(args.env), 
+        ppo(lambda : gym.make(args.env),
             actor_critic=core.MLPActorCritic,
-            ac_kwargs=dict(hidden_sizes=[args.hid]*args.l), 
+            ac_kwargs=dict(hidden_sizes=[args.hid]*args.l),
             gamma=args.gamma,
             clip_ratio=args.clip_ratio,
             pi_lr=args.pi_lr,
             vf_lr=args.vf_lr,
             lam=args.lam,
             target_kl=args.target_kl,
-            seed=args.seed, 
-            steps_per_epoch=args.steps, 
+            seed=args.seed,
+            steps_per_epoch=args.steps,
             epochs=args.epochs,
             logger_kwargs=logger_kwargs,
             sweep=args.sweep,
