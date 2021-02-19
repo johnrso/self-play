@@ -1,4 +1,15 @@
 program: ppo.py
+command:
+  - ${env}
+  - python
+  - ${program}
+  - "--domain_name"
+  - "cheetah"
+  - "--task_name"
+  - "run"
+  - "--video"
+  - "True"
+  - ${args}
 method: bayes
 metric:
   name: AverageEpRet
