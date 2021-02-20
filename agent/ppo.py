@@ -92,13 +92,13 @@ class PPOBuffer:
         return {k: torch.as_tensor(v, dtype=torch.float32) for k,v in data.items()}
 
 default_ac_kwargs = {
-    "activation": "tanh"
+    "activation": "tanh",
+    "hidden_sizes": (64, 64),
 }
 
 def ppo(env_fn,
         actor_critic=core.MLPActorCritic,
-        hidden_sizes=(64, 64),
-        ac_kwargs=dict(),
+        ac_kwargs=default_ac_kwargs,
         seed=0,
         steps_per_epoch=4000,
         epochs=50,
@@ -239,8 +239,8 @@ def ppo(env_fn,
     act_dim = env.action_space.shape
 
     # Create actor-critic module
-    ac = actor_critic(env.observation_space, 
-                      env.action_space, 
+    ac = actor_critic(env.observation_space,
+                      env.action_space,
                       hidden_sizes=hidden_sizes,
                       **ac_kwargs)
 
