@@ -1,3 +1,5 @@
 *venv/
-*wandb*
+/wandb/
 *__pycache__/
+/agent/wandb/
+/agent/data/
