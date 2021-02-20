@@ -91,7 +91,9 @@ class PPOBuffer:
                     adv=self.adv_buf, logp=self.logp_buf)
         return {k: torch.as_tensor(v, dtype=torch.float32) for k,v in data.items()}
 
-
+default_ac_kwargs = {
+    "activation": "tanh"
+}
 
 def ppo(env_fn,
         actor_critic=core.MLPActorCritic,

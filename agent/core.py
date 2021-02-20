@@ -161,11 +161,11 @@ def mask_constructor(action_space):
             open_above_mask += [1 if high_open(high) else 0]
             open_below_mask += [1 if low_open(low) else 0]
         # Fully open action dimensions require no action-mapping or logp correction.
-        else
+        else:
             closed_mask += [0]
             open_above_mask += [0]
             open_below_mask += [0]
-    return torch.as_tensor(el) for el in [closed_mask, open_above_mask, open_below_mask]
+    return tuple([torch.as_tensor(el) for el in [closed_mask, open_above_mask, open_below_mask]])
 
 
 class MLPActorCritic(nn.Module):
@@ -193,15 +193,16 @@ class MLPActorCritic(nn.Module):
             self.lows = torch.as_tensor(np.nan_to_num(self.lows, neginf=0, posinf=0))
             self.highs = torch.as_tensor(np.nan_to_num(self.highs, neginf=0, posinf=0))
             self.closed, self.open_above, self.open_below = mask_constructor(action_space)
-
             # Build Policy (pass in corrections to log probs as lambdas taking action)
             self.pi = MLPGaussianActor(obs_dim,
                                        action_space.shape[0],
                                        hidden_sizes,
                                        activation,
-                                       {'closed_mask': self.closed,
+                                       ac_kwargs = {'closed_mask': self.closed,
                                        'half_open_mask': self.open_above + self.open_below,
-                                       'correction': -torch.log(2 * (self.highs - self.lows))})
+                                       'correction': -torch.log(2 * (self.highs - self.lows))
+                                       }
+                                       )
 
         # Use Categorical Actor if action space is Discrete
         elif isinstance(action_space, Discrete):
