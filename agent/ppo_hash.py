@@ -91,14 +91,11 @@ class PPOBuffer:
                     adv=self.adv_buf, logp=self.logp_buf)
         return {k: torch.as_tensor(v, dtype=torch.float32) for k,v in data.items()}
 
-default_ac_kwargs = {
-    "activation": "tanh"
-}
+
 
 def ppo(env_fn,
         actor_critic=core.MLPActorCritic,
-        hidden_sizes=(64,64),
-        ac_kwargs=default_ac_kwargs,
+        ac_kwargs=dict(),
         seed=0,
         steps_per_epoch=4000,
         epochs=50,
@@ -162,7 +159,6 @@ def ppo(env_fn,
                                            | for the provided observations. (Critical:
                                            | make sure to flatten this!)
             ===========  ================  ======================================
-        hidden_sizes (tuple): A tuple of hidden sizes of the policy net.
         ac_kwargs (dict): Any kwargs appropriate for the ActorCritic object
             you provided to PPO.
         seed (int): Seed for random number generators.
@@ -239,10 +235,7 @@ def ppo(env_fn,
     act_dim = env.action_space.shape
 
     # Create actor-critic module
-    ac = actor_critic(env.observation_space,
-                      env.action_space,
-                      hidden_sizes=hidden_sizes,
-                      **ac_kwargs)
+    ac = actor_critic(env.observation_space, env.action_space, **ac_kwargs)
 
     # Sync params across processes
     sync_params(ac)
@@ -466,8 +459,7 @@ if __name__ == '__main__':
                                   task_name=args.task_name,
                                   seed=args.seed),
             actor_critic=core.MLPActorCritic,
-            hidden_sizes=[args.hid]*args.l,
-            ac_kwargs=default_ac_kwargs,
+            ac_kwargs=dict(hidden_sizes=[args.hid]*args.l),
             gamma=args.gamma,
             clip_ratio=args.clip_ratio,
             pi_lr=args.pi_lr,
@@ -486,8 +478,7 @@ if __name__ == '__main__':
         print("using gym env")
         ppo(lambda : gym.make(args.env),
             actor_critic=core.MLPActorCritic,
-            hidden_sizes=[args.hid]*args.l,
-            ac_kwargs=default_ac_kwargs,
+            ac_kwargs=dict(hidden_sizes=[args.hid]*args.l),
             gamma=args.gamma,
             clip_ratio=args.clip_ratio,
             pi_lr=args.pi_lr,
