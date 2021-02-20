@@ -336,7 +336,6 @@ def ppo(env_fn,
     for epoch in range(epochs):
         for t in range(local_steps_per_epoch):
             a, v, logp = ac.step(torch.as_tensor(o, dtype=torch.float32))
-            print(a)
             next_o, r, d, _ = env.step(a)
             ep_ret += r
             ep_len += 1

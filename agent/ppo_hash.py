@@ -14,6 +14,7 @@ from dmc2gym.wrappers import DMCWrapper
 import os
 import wandb
 
+# implementation of PPO that uses hashing to reward exploration, as seen in 285 L13.
 
 # tmp
 os.environ['DISABLE_MUJOCO_RENDERING'] = '1'
