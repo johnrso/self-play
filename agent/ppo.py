@@ -97,6 +97,7 @@ default_ac_kwargs = {
 
 def ppo(env_fn,
         actor_critic=core.MLPActorCritic,
+        hidden_sizes=(64, 64),
         ac_kwargs=dict(),
         seed=0,
         steps_per_epoch=4000,
@@ -161,6 +162,7 @@ def ppo(env_fn,
                                            | for the provided observations. (Critical:
                                            | make sure to flatten this!)
             ===========  ================  ======================================
+        hidden_sizes (tuple): A tuple of hidden sizes of the policy net.
         ac_kwargs (dict): Any kwargs appropriate for the ActorCritic object
             you provided to PPO.
         seed (int): Seed for random number generators.
@@ -237,7 +239,10 @@ def ppo(env_fn,
     act_dim = env.action_space.shape
 
     # Create actor-critic module
-    ac = actor_critic(env.observation_space, env.action_space, **ac_kwargs)
+    ac = actor_critic(env.observation_space, 
+                      env.action_space, 
+                      hidden_sizes=hidden_sizes,
+                      **ac_kwargs)
 
     # Sync params across processes
     sync_params(ac)
