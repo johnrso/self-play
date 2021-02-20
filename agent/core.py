@@ -89,6 +89,7 @@ class MLPGaussianActor(Actor):
                  act_dim,
                  hidden_sizes,
                  activation,
+                 dim_rand = 1, # hard code
                  **kwargs):
         super().__init__()
 
@@ -96,7 +97,6 @@ class MLPGaussianActor(Actor):
         # Initialize Gaussian Parameters and Network Architecture
         self.act_dim = act_dim
         self.base_net = mlp([obs_dim] + list(hidden_sizes), activation)
-        assert len(self.corrections) == act_dim
         self.mu_layer = nn.Linear(hidden_sizes[-1], act_dim)
         self.log_layer = nn.Linear(hidden_sizes[-1], pow(act_dim, dim_rand))
         self.has_masks = False
@@ -225,7 +225,7 @@ class MLPActorCritic(nn.Module):
             if not self.is_discrete:
                 # Map actions to squashed action space using masks generated in __init__.
                 lows, highs = self.lows, self.highs
-                a = a + self.closed * (-a + lows + (highs - lows) * (tanh(a) + 1) / 2)
+                a = a + self.closed * (-a + lows + (highs - lows) * (np.tanh(a) + 1) / 2)
                 a = a + self.open_above * (-a + lows + np.exp(a))
                 a = a + self.open_below * (-a + highs - np.exp(a))
             v = self.v(obs)

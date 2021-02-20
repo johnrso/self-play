@@ -5,6 +5,7 @@ import gym
 from gym.spaces import Discrete, Box
 import time
 import core as core
+import torch.nn as nn
 
 from utils.logx import EpochLogger
 from utils.mpi_pytorch import setup_pytorch_for_mpi, sync_params, mpi_avg_grads
@@ -92,7 +93,8 @@ class PPOBuffer:
         return {k: torch.as_tensor(v, dtype=torch.float32) for k,v in data.items()}
 
 default_ac_kwargs = {
-    "activation": "tanh"
+    "activation": nn.Tanh,
+    # "dim_rand": 1,
 }
 
 def ppo(env_fn,
