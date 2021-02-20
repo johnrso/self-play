@@ -89,7 +89,7 @@ class MLPGaussianActor(Actor):
                  act_dim,
                  hidden_sizes,
                  activation,
-                 dim_rand = 1, # hard code
+                 dim_rand = 1, # hard code, fix fix fix @kiran or @surya; how to pass in cleanly?
                  **kwargs):
         super().__init__()
 
