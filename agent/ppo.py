@@ -336,6 +336,7 @@ def ppo(env_fn,
     for epoch in range(epochs):
         for t in range(local_steps_per_epoch):
             a, v, logp = ac.step(torch.as_tensor(o, dtype=torch.float32))
+            print(a)
             next_o, r, d, _ = env.step(a)
             ep_ret += r
             ep_len += 1
@@ -455,8 +456,6 @@ if __name__ == '__main__':
     parser.add_argument('--target_kl', type=float, default=0.01)
 
     args = parser.parse_args()
-    print(args.dmc)
-    print(args.video)
     mpi_fork(args.cpu)  # run parallel code with mpi
 
     from spinup.utils.run_utils import setup_logger_kwargs

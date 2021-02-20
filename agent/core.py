@@ -96,6 +96,7 @@ class MLPGaussianActor(Actor):
 
         # Initialize Gaussian Parameters and Network Architecture
         self.act_dim = act_dim
+        self.sigma_num_dims = dim_rand
         self.base_net = mlp([obs_dim] + list(hidden_sizes), activation)
         self.mu_layer = nn.Linear(hidden_sizes[-1], act_dim)
         self.log_layer = nn.Linear(hidden_sizes[-1], pow(act_dim, dim_rand))
@@ -111,7 +112,8 @@ class MLPGaussianActor(Actor):
         mu = self.mu_layer(self.base_net(obs))
         log_std = self.log_layer(self.base_net(obs))
         std = torch.exp(torch.clamp(log_std, LOG_STD_MIN, LOG_STD_MAX))
-        return Normal(mu, torch.reshape(std, (self.act_dim,)))
+        new_shape = self.sigma_num_dims * (self.act_dim,) + (-1,)
+        return Normal(mu, torch.reshape(std, new_shape))
 
     def _log_prob_from_distribution(self, pi, act):
         # Last axis sum needed for Torch Distribution
