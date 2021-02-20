@@ -113,7 +113,7 @@ class MLPGaussianActor(Actor):
         mu = self.mu_layer(self.base_net(obs))
         log_std = self.log_layer(self.base_net(obs))
         std = torch.exp(torch.clamp(log_std, LOG_STD_MIN, LOG_STD_MAX))
-        new_shape = self.sigma_num_dims * (self.act_dim,) + (-1,)
+        new_shape = (-1,) + self.sigma_num_dims * (self.act_dim,) 
         if self.sigma_num_dims == 2:
             return MultivariateNormal(mu, torch.squeeze(torch.reshape(std, new_shape)))
         return Normal(mu, torch.squeeze(torch.reshape(std, new_shape)))
@@ -225,9 +225,7 @@ class MLPActorCritic(nn.Module):
                 values = pi.enumerate_support()
                 a = values[torch.argmax(torch.tensor([pi.log_prob(act) for act in values]))]
             else:
-                print(pi)
                 a = pi.sample()
-                print(a)
             logp_a = self.pi._log_prob_from_distribution(pi, a)
             if not self.is_discrete:
                 # Map actions to squashed action space using masks generated in __init__.
@@ -235,6 +233,7 @@ class MLPActorCritic(nn.Module):
                 a = a + self.closed * (-a + lows + (highs - lows) * (np.tanh(a) + 1) / 2)
                 a = a + self.open_above * (-a + lows + np.exp(a))
                 a = a + self.open_below * (-a + highs - np.exp(a))
+                a = np.clip(a, lows, highs)
             v = self.v(obs)
         return np.array(a), v.numpy(), logp_a.numpy()
 
