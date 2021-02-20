@@ -211,7 +211,8 @@ def ppo(env_fn,
         if args.sweep:
 
             wandb.init(config=hyperparameter_defaults,
-                       project='ppo_sweep_'+domain_name+'_'+task_name)
+                       project='ppo-hyperparemter-sweep',
+                       entity='self-play-project')
             config = wandb.config
 
             # sweep params
