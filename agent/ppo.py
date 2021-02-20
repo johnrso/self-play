@@ -211,10 +211,10 @@ def ppo(env_fn,
         if args.sweep:
 
             wandb.init(config=hyperparameter_defaults,
-                       project='ppo-hyperparemter-sweep',
+                       project='ppo-hyperparameter-sweep',
                        entity='self-play-project')
             config = wandb.config
-
+            wandb.run.name = "{}_{}_".format(domain_name, task_name) + wandb.run.name
             # sweep params
             gamma=config.gamma
             clip_ratio=config.clip_ratio
