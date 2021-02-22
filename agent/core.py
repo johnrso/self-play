@@ -230,9 +230,9 @@ class MLPActorCritic(nn.Module):
             if not self.is_discrete:
                 # Map actions to squashed action space using masks generated in __init__.
                 lows, highs = self.lows, self.highs
-                a = a + self.closed * (-a + lows + (highs - lows) * (np.tanh(a) + 1) / 2)
-                a = a + self.open_above * (-a + lows + np.exp(a))
-                a = a + self.open_below * (-a + highs - np.exp(a))
+                a = np.where(self.closed, lows + (highs - lows) * (np.tanh(a) + 1) / 2, a)
+                a = np.where(self.open_above, lows + np.exp(a), a)
+                a = np.where(self.open_below, highs - np.exp(a), a)
                 a = np.clip(a, lows, highs)
             v = self.v(obs)
         return np.array(a), v.numpy(), logp_a.numpy()
