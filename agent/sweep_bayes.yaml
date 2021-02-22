@@ -32,4 +32,4 @@ parameters:
     max: .99
   target_kl:
     min: 0.005
-    max: 0.02
+    max: 0.05

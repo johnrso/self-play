@@ -211,10 +211,10 @@ def ppo(env_fn,
         if args.sweep:
 
             wandb.init(config=hyperparameter_defaults,
-                       project='ppo-hyperparemter-sweep',
+                       project='ppo-hyperparameter-sweep',
                        entity='self-play-project')
             config = wandb.config
-
+            wandb.run.name = "{}_{}_".format(domain_name, task_name) + wandb.run.name
             # sweep params
             gamma=config.gamma
             clip_ratio=config.clip_ratio
@@ -305,7 +305,7 @@ def ppo(env_fn,
             pi_optimizer.zero_grad()
             loss_pi, pi_info = compute_loss_pi(data)
             kl = mpi_avg(pi_info['kl'])
-            if kl > 1.5 * target_kl:
+            if kl > 2 * target_kl:
                 logger.log('Early stopping at step %d due to reaching max kl.'%i)
                 break
             loss_pi.backward()
