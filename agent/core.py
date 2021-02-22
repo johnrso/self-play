@@ -90,7 +90,7 @@ class MLPGaussianActor(Actor):
                  act_dim,
                  hidden_sizes,
                  activation,
-                 dim_rand = 1, # hard code, fix fix fix @kiran or @surya; how to pass in cleanly?
+                 dim_rand = 1, # TODO: hard code, fix fix fix @kiran or @surya; how to pass in cleanly?
                  **kwargs):
         super().__init__()
 
@@ -113,7 +113,7 @@ class MLPGaussianActor(Actor):
         mu = self.mu_layer(self.base_net(obs))
         log_std = self.log_layer(self.base_net(obs))
         std = torch.exp(torch.clamp(log_std, LOG_STD_MIN, LOG_STD_MAX))
-        new_shape = (-1,) + self.sigma_num_dims * (self.act_dim,) 
+        new_shape = (-1,) + self.sigma_num_dims * (self.act_dim,)
         if self.sigma_num_dims == 2:
             return MultivariateNormal(mu, torch.squeeze(torch.reshape(std, new_shape)))
         return Normal(mu, torch.squeeze(torch.reshape(std, new_shape)))
@@ -231,8 +231,8 @@ class MLPActorCritic(nn.Module):
                 # Map actions to squashed action space using masks generated in __init__.
                 lows, highs = self.lows, self.highs
                 a = np.where(self.closed, lows + (highs - lows) * (np.tanh(a) + 1) / 2, a)
-                a = np.where(self.open_above, lows + np.exp(a), a)
-                a = np.where(self.open_below, highs - np.exp(a), a)
+                a = np.where(self.open_above, lows + torch.from_numpy(np.exp(a)), a)
+                a = np.where(self.open_below, highs - torch.from_numpy(np.exp(a)), a)
                 a = np.clip(a, lows, highs)
             v = self.v(obs)
         return np.array(a), v.numpy(), logp_a.numpy()
