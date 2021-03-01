@@ -126,8 +126,8 @@ class MLPGaussianActor(Actor):
         if self.has_masks:
             # corr = -log(2 * (high - low)) is the non-action-dependent term
             # in the logp correction for closed interval action space dimensions
-            corr = self.closed_bound_correction
-            logp_pi += (2 * (act + F.softmax(-2 * act) + corr) * self.closed_mask).sum(axis=-1)
+            corr = self.closed_bound_correction + 2 * (act + F.softmax(-2 * act, dim=-1))
+            logp_pi += (corr * self.closed_mask).sum(axis=-1)
             logp_pi -= (act * self.half_open_mask).sum(axis=-1)
         return logp_pi
 
@@ -202,11 +202,9 @@ class MLPActorCritic(nn.Module):
                                        action_space.shape[0],
                                        hidden_sizes,
                                        activation,
-                                       ac_kwargs = {'closed_mask': self.closed,
-                                       'half_open_mask': self.open_above + self.open_below,
-                                       'correction': -torch.log(2 * (self.highs - self.lows))
-                                       }
-                                       )
+                                       closed_mask=self.closed,
+                                       half_open_mask=self.open_above + self.open_below,
+                                       correction=-torch.log(2 * (self.highs - self.lows)))
 
         # Use Categorical Actor if action space is Discrete
         elif isinstance(action_space, Discrete):

@@ -484,7 +484,6 @@ if __name__ == '__main__':
             domain_name=args.domain_name,
             task_name=args.task_name)
     else:
-        print("using gym env")
         ppo(lambda : gym.make(args.env),
             actor_critic=core.MLPActorCritic,
             hidden_sizes=[args.hid]*args.l,
