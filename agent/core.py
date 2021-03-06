@@ -90,17 +90,28 @@ class MLPGaussianActor(Actor):
                  act_dim,
                  hidden_sizes,
                  activation,
-                 dim_rand = 1, # TODO: hard code, fix fix fix @kiran or @surya; how to pass in cleanly?
+                 std_dim=1,
+                 network_std=False,
                  **kwargs):
         super().__init__()
 
-
         # Initialize Gaussian Parameters and Network Architecture
         self.act_dim = act_dim
-        self.sigma_num_dims = dim_rand
         self.base_net = mlp([obs_dim] + list(hidden_sizes), activation)
         self.mu_layer = nn.Linear(hidden_sizes[-1], act_dim)
-        self.log_layer = nn.Linear(hidden_sizes[-1], pow(act_dim, dim_rand))
+        if network_std:
+            self.log_layer = nn.Linear(hidden_sizes[-1], pow(act_dim, std_dim))
+        else:
+            log_std = -0.5 * np.ones(pow(act_dim, std_dim), dtype=np.float32)
+            self.log_std = nn.Parameter(torch.as_tensor(log_std))
+        assert std_dim in [0, 1, 2]
+        self.std_dim = std_dim
+        self.network_std = network_std
+        
+        # Load bitmasks representing which dimensions are closed and half-open
+        # on each side, plus the part of the log prob correction for closed
+        # intervals which is dependent on the action range (and not the sampled action)
+        # Only used for continuous (Box) action spaces
         self.has_masks = False
         if 'closed_mask' in kwargs:
             self.has_masks = True
@@ -111,10 +122,11 @@ class MLPGaussianActor(Actor):
 
     def _distribution(self, obs):
         mu = self.mu_layer(self.base_net(obs))
-        log_std = self.log_layer(self.base_net(obs))
+        log_std = self.log_layer(self.base_net(obs)) if self.network_std else self.log_std
         std = torch.exp(torch.clamp(log_std, LOG_STD_MIN, LOG_STD_MAX))
-        new_shape = (-1,) + self.sigma_num_dims * (self.act_dim,)
-        if self.sigma_num_dims == 2:
+        new_shape = (-1,) + self.std_dim * (self.act_dim,)
+        if self.std_dim == 2:
+            print(torch.squeeze(torch.reshape(std, new_shape)))
             return MultivariateNormal(mu, torch.squeeze(torch.reshape(std, new_shape)))
         return Normal(mu, torch.squeeze(torch.reshape(std, new_shape)))
 
@@ -124,8 +136,9 @@ class MLPGaussianActor(Actor):
 
         # Make coordinate-wise adjustment to log prob
         if self.has_masks:
-            # corr = -log(2 * (high - low)) is the non-action-dependent term
-            # in the logp correction for closed interval action space dimensions
+            # self.closed_bound_correction = -log(2 * (high - low)) is the part of
+            # the logp correction for closed interval action space dimensions which
+            # does not depend on the action, the part that does is 2(a + softmax(-2a))
             corr = self.closed_bound_correction + 2 * (act + F.softmax(-2 * act, dim=-1))
             logp_pi += (corr * self.closed_mask).sum(axis=-1)
             logp_pi -= (act * self.half_open_mask).sum(axis=-1)
@@ -146,7 +159,6 @@ def mask_constructor(action_space):
     low_open, high_open = lambda l: l == float('-inf'), lambda h: h == float('inf')
     closed_mask, open_above_mask, open_below_mask = [], [], []
     for low, high in action_limits:
-        closed_func = lambda x: 2 * (x + F.softplus(-2 * x)) - np.log(2 * (high - low))
         # For two-sided limits, we need both limit bounds to calculate logp diff.
         # Function _log_prob_from_distribution needs correction in the form of:
         # 2 * (a + F.softplus(-2 * a)) - np.log(2 * (high - low))
@@ -179,7 +191,9 @@ class MLPActorCritic(nn.Module):
                  observation_space,
                  action_space,
                  hidden_sizes=(64,64),
-                 activation=nn.Tanh):
+                 activation=nn.Tanh,
+                 std_dim=1,
+                 network_std=False):
         super().__init__()
 
         obs_dim = observation_space.shape[0]
@@ -202,6 +216,8 @@ class MLPActorCritic(nn.Module):
                                        action_space.shape[0],
                                        hidden_sizes,
                                        activation,
+                                       std_dim=std_dim,
+                                       network_std=False,
                                        closed_mask=self.closed,
                                        half_open_mask=self.open_above + self.open_below,
                                        correction=-torch.log(2 * (self.highs - self.lows)))
