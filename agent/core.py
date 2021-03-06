@@ -99,12 +99,11 @@ class MLPGaussianActor(Actor):
         self.act_dim = act_dim
         self.base_net = mlp([obs_dim] + list(hidden_sizes), activation)
         self.mu_layer = nn.Linear(hidden_sizes[-1], act_dim)
+        assert std_dim in [0, 1]
         if network_std:
             self.log_layer = nn.Linear(hidden_sizes[-1], pow(act_dim, std_dim))
         else:
-            log_std = -0.5 * np.ones(pow(act_dim, std_dim), dtype=np.float32)
-            self.log_std = nn.Parameter(torch.as_tensor(log_std))
-        assert std_dim in [0, 1, 2]
+            self.log_std = nn.Parameter(torch.squeeze(-0.5*torch.ones(pow(act_dim, std_dim))))
         self.std_dim = std_dim
         self.network_std = network_std
         
@@ -122,13 +121,9 @@ class MLPGaussianActor(Actor):
 
     def _distribution(self, obs):
         mu = self.mu_layer(self.base_net(obs))
-        log_std = self.log_layer(self.base_net(obs)) if self.network_std else self.log_std
+        log_std = self.log_std if not self.network_std else self.log_layer(self.base_net(obs)) 
         std = torch.exp(torch.clamp(log_std, LOG_STD_MIN, LOG_STD_MAX))
-        new_shape = (-1,) + self.std_dim * (self.act_dim,)
-        if self.std_dim == 2:
-            print(torch.squeeze(torch.reshape(std, new_shape)))
-            return MultivariateNormal(mu, torch.squeeze(torch.reshape(std, new_shape)))
-        return Normal(mu, torch.squeeze(torch.reshape(std, new_shape)))
+        return Normal(mu, std)
 
     def _log_prob_from_distribution(self, pi, act):
         # Last axis sum needed for Torch Distribution

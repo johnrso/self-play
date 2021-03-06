@@ -304,10 +304,10 @@ def ppo(env_fn,
         for i in range(train_pi_iters):
             pi_optimizer.zero_grad()
             loss_pi, pi_info = compute_loss_pi(data)
-            kl = mpi_avg(pi_info['kl'])
-            if kl > 2 * target_kl:
-                logger.log('Early stopping at step %d due to reaching max kl.'%i)
-                break
+#            kl = mpi_avg(pi_info['kl'])
+#            if kl > 2 * target_kl:
+#                logger.log('Early stopping at step %d due to reaching max kl.'%i)
+#                break
             loss_pi.backward()
             mpi_avg_grads(ac.pi)    # average grads across MPI processes
             pi_optimizer.step()
