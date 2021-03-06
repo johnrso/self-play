@@ -4,7 +4,7 @@ from torch.optim import Adam, lr_scheduler
 import gym
 from gym.spaces import Discrete, Box
 import time
-import core as core
+import simple_core as core
 import torch.nn as nn
 
 from utils.logx import EpochLogger
@@ -208,22 +208,22 @@ def ppo(env_fn,
                                        lam=lam,
                                        target_kl=target_kl)
 
-        if args.sweep:
+        wandb.init(config=hyperparameter_defaults,
+                   project='ppo-hyperparameter-sweep',
+                   entity='self-play-project')
+        config = wandb.config
+        # sweep params
+        gamma=config.gamma
+        clip_ratio=config.clip_ratio
+        pi_lr=config.pi_lr
+        vf_lr=config.vf_lr
+        lam=config.lam
+        target_kl=config.target_kl
 
-            wandb.init(config=hyperparameter_defaults,
-                       project='ppo-hyperparameter-sweep',
-                       entity='self-play-project')
-            config = wandb.config
+        if args.sweep:
             wandb.run.name = "{}_{}_".format(domain_name, task_name) + wandb.run.name
-            # sweep params
-            gamma=config.gamma
-            clip_ratio=config.clip_ratio
-            pi_lr=config.pi_lr
-            vf_lr=config.vf_lr
-            lam=config.lam
-            target_kl=config.target_kl
         else:
-            wandb.init(config=hyperparameter_defaults,project="ppo")
+            wandb.run.name = "{}_".format(env_name) + wandb.run.name
 
 
     # Set up logger and save configuration
@@ -238,6 +238,8 @@ def ppo(env_fn,
     # Instantiate environment
     env = env_fn()
     eval_env = env_fn()
+    action_high = env.action_space.high
+    action_low = env.action_space.low
     obs_dim = env.observation_space.shape
     act_dim = env.action_space.shape
 
@@ -245,7 +247,8 @@ def ppo(env_fn,
     ac = actor_critic(env.observation_space,
                       env.action_space,
                       hidden_sizes=hidden_sizes,
-                      **ac_kwargs)
+                      action_low=action_low,
+                      action_high=action_high)
 
     # Sync params across processes
     sync_params(ac)
@@ -270,11 +273,10 @@ def ppo(env_fn,
 
         # Useful extra info
         approx_kl = (logp_old - logp).mean().item()
-        #ent = pi.entropy().mean().item()
+        ent = pi.entropy().mean().item()
         clipped = ratio.gt(1+clip_ratio) | ratio.lt(1-clip_ratio)
         clipfrac = torch.as_tensor(clipped, dtype=torch.float32).mean().item()
-        #pi_info = dict(kl=approx_kl, ent=ent, cf=clipfrac)
-        pi_info = dict(kl=approx_kl, ent=0, cf=clipfrac)
+        pi_info = dict(kl=approx_kl, ent=ent, cf=clipfrac)
 
         return loss_pi, pi_info
 
@@ -304,10 +306,10 @@ def ppo(env_fn,
         for i in range(train_pi_iters):
             pi_optimizer.zero_grad()
             loss_pi, pi_info = compute_loss_pi(data)
-#            kl = mpi_avg(pi_info['kl'])
-#            if kl > 2 * target_kl:
-#                logger.log('Early stopping at step %d due to reaching max kl.'%i)
-#                break
+            kl = mpi_avg(pi_info['kl'])
+            # if kl > 2 * target_kl:
+            #     logger.log('Early stopping at step %d due to reaching max kl.'%i)
+            #     break
             loss_pi.backward()
             mpi_avg_grads(ac.pi)    # average grads across MPI processes
             pi_optimizer.step()
@@ -366,9 +368,6 @@ def ppo(env_fn,
                     # only save EpRet / EpLen if trajectory finished
                     logger.store(EpRet=ep_ret, EpLen=ep_len)
                 o, ep_ret, ep_len = env.reset(), 0, 0
-
-
-
 
         # Save model & evaluate
         if (epoch % save_freq == 0) or (epoch == epochs-1):

@@ -1,1 +1,2 @@
-# Paper name, [line numbers of papers it references], [line numbers of relevant concepts]
+# [Your Name], [Paper Subject], [Paper name], [line numbers of papers it references], [line numbers of relevant concepts], [ArXiV Link]
+Kiran, Skill-based Exploration, Diversity is All You Need: Learning Skills without a Reward Function, , , 

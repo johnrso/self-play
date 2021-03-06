@@ -63,10 +63,6 @@ def discount_cumsum(x, discount):
     """
     return scipy.signal.lfilter([1], [1, float(-discount)], x[::-1], axis=0)[::-1]
 
-
-
-
-
 class MLPCategoricalActor(Actor):
 
     def __init__(self, obs_dim, act_dim, hidden_sizes, activation):
