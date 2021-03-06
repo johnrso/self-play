@@ -12,7 +12,7 @@ command:
   - ${args}
 method: bayes
 metric:
-  name: AverageEpRet
+  name: eval_returns
   goal: maximize
 parameters:
   gamma:
