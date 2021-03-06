@@ -94,7 +94,7 @@ class PPOBuffer:
 
 default_ac_kwargs = {
     "activation": nn.Tanh,
-    # "dim_rand": 1,
+    "std_dim": 2
 }
 
 def ppo(env_fn,
@@ -453,9 +453,14 @@ if __name__ == '__main__':
     parser.add_argument('--vf_lr', type=float, default=0.001)
     parser.add_argument('--lam', type=float, default=0.97)
     parser.add_argument('--target_kl', type=float, default=0.01)
+    parser.add_argument('--std_dim', type=int, default=2)
+    parser.add_argument('--network_std', type=parse_boolean, default=False)
 
     args = parser.parse_args()
     mpi_fork(args.cpu)  # run parallel code with mpi
+    ac_kwargs = default_ac_kwargs
+    ac_kwargs['std_dim'] = args.std_dim
+    ac_kwargs['network_std'] = args.network_std
 
     from spinup.utils.run_utils import setup_logger_kwargs
     logger_kwargs = setup_logger_kwargs(args.exp_name, args.seed)
@@ -467,7 +472,7 @@ if __name__ == '__main__':
                                   seed=args.seed),
             actor_critic=core.MLPActorCritic,
             hidden_sizes=[args.hid]*args.l,
-            ac_kwargs=default_ac_kwargs,
+            ac_kwargs=ac_kwargs,
             gamma=args.gamma,
             clip_ratio=args.clip_ratio,
             pi_lr=args.pi_lr,
@@ -483,11 +488,10 @@ if __name__ == '__main__':
             domain_name=args.domain_name,
             task_name=args.task_name)
     else:
-        print("using gym env")
         ppo(lambda : gym.make(args.env),
             actor_critic=core.MLPActorCritic,
             hidden_sizes=[args.hid]*args.l,
-            ac_kwargs=default_ac_kwargs,
+            ac_kwargs=ac_kwargs,
             gamma=args.gamma,
             clip_ratio=args.clip_ratio,
             pi_lr=args.pi_lr,
@@ -502,3 +506,4 @@ if __name__ == '__main__':
             video=args.video,
             domain_name=args.domain_name,
             task_name=args.task_name)
+
