@@ -4,7 +4,7 @@ from torch.optim import Adam, lr_scheduler
 import gym
 from gym.spaces import Discrete, Box
 import time
-import simple_core as core
+import core
 import torch.nn as nn
 
 from utils.logx import EpochLogger
@@ -200,6 +200,13 @@ def ppo(env_fn,
     # Special function to avoid certain slowdowns from PyTorch + MPI combo.
     setup_pytorch_for_mpi()
 
+    # Instantiate environment
+    env = env_fn()
+    eval_env = env_fn()
+    env_name = env.unwrapped.spec.id
+    obs_dim = env.observation_space.shape
+    act_dim = env.action_space.shape
+
     if proc_id() == 0:
         hyperparameter_defaults = dict(gamma=gamma,
                                        clip_ratio=clip_ratio,
@@ -213,14 +220,15 @@ def ppo(env_fn,
                    entity='self-play-project')
         config = wandb.config
         # sweep params
-        gamma=config.gamma
-        clip_ratio=config.clip_ratio
-        pi_lr=config.pi_lr
-        vf_lr=config.vf_lr
-        lam=config.lam
-        target_kl=config.target_kl
-
         if args.sweep:
+            gamma = config.gamma
+            clip_ratio = config.clip_ratio
+            pi_lr = config.pi_lr
+            vf_lr = config.vf_lr
+            lam = config.lam
+            target_kl = config.target_kl
+
+        if args.dmc:
             wandb.run.name = "{}_{}_".format(domain_name, task_name) + wandb.run.name
         else:
             wandb.run.name = "{}_".format(env_name) + wandb.run.name
@@ -235,20 +243,13 @@ def ppo(env_fn,
     torch.manual_seed(seed)
     np.random.seed(seed)
 
-    # Instantiate environment
-    env = env_fn()
-    eval_env = env_fn()
-    action_high = env.action_space.high
-    action_low = env.action_space.low
-    obs_dim = env.observation_space.shape
-    act_dim = env.action_space.shape
-
     # Create actor-critic module
+    print("about to build actor critic")
     ac = actor_critic(env.observation_space,
                       env.action_space,
                       hidden_sizes=hidden_sizes,
-                      action_low=action_low,
-                      action_high=action_high)
+                      std_dim=args.std_dim,
+                      network_std=args.network_std)
 
     # Sync params across processes
     sync_params(ac)
@@ -307,9 +308,9 @@ def ppo(env_fn,
             pi_optimizer.zero_grad()
             loss_pi, pi_info = compute_loss_pi(data)
             kl = mpi_avg(pi_info['kl'])
-            # if kl > 2 * target_kl:
-            #     logger.log('Early stopping at step %d due to reaching max kl.'%i)
-            #     break
+#            if kl > 2 * target_kl:
+#                logger.log('Early stopping at step %d due to reaching max kl.'%i)
+#                break
             loss_pi.backward()
             mpi_avg_grads(ac.pi)    # average grads across MPI processes
             pi_optimizer.step()
@@ -453,7 +454,7 @@ if __name__ == '__main__':
     parser.add_argument('--vf_lr', type=float, default=0.001)
     parser.add_argument('--lam', type=float, default=0.97)
     parser.add_argument('--target_kl', type=float, default=0.01)
-    parser.add_argument('--std_dim', type=int, default=2)
+    parser.add_argument('--std_dim', type=int, default=1)
     parser.add_argument('--network_std', type=parse_boolean, default=False)
 
     args = parser.parse_args()

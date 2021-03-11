@@ -88,7 +88,7 @@ class MLPGaussianActor(Actor):
                  activation,
                  std_dim=1,
                  network_std=False,
-                 **kwargs):
+                 squash=True):
         super().__init__()
 
         # Initialize Gaussian Parameters and Network Architecture
@@ -102,18 +102,7 @@ class MLPGaussianActor(Actor):
             self.log_std = nn.Parameter(torch.squeeze(-0.5*torch.ones(pow(act_dim, std_dim))))
         self.std_dim = std_dim
         self.network_std = network_std
-        
-        # Load bitmasks representing which dimensions are closed and half-open
-        # on each side, plus the part of the log prob correction for closed
-        # intervals which is dependent on the action range (and not the sampled action)
-        # Only used for continuous (Box) action spaces
-        self.has_masks = False
-        if 'closed_mask' in kwargs:
-            self.has_masks = True
-            self.closed_mask = kwargs['closed_mask']
-            assert 'half_open_mask' in kwargs and 'correction' in kwargs
-            self.half_open_mask = kwargs['half_open_mask']
-            self.closed_bound_correction = kwargs['correction']
+        self.squash = squash
 
     def _distribution(self, obs):
         mu = self.mu_layer(self.base_net(obs))
@@ -124,15 +113,9 @@ class MLPGaussianActor(Actor):
     def _log_prob_from_distribution(self, pi, act):
         # Last axis sum needed for Torch Distribution
         logp_pi = pi.log_prob(act).sum(axis=-1)
-
-        # Make coordinate-wise adjustment to log prob
-        if self.has_masks:
-            # self.closed_bound_correction = -log(2 * (high - low)) is the part of
-            # the logp correction for closed interval action space dimensions which
-            # does not depend on the action, the part that does is 2(a + softmax(-2a))
-            corr = self.closed_bound_correction + 2 * (act + F.softmax(-2 * act, dim=-1))
-            logp_pi += (corr * self.closed_mask).sum(axis=-1)
-            logp_pi -= (act * self.half_open_mask).sum(axis=-1)
+        # Make adjustment to log prob if squashing
+        if self.squash:
+            logp_pi += (2 * (act + F.softplus(-2 * act) - np.log(2))).sum(axis=-1)
         return logp_pi
 
 
@@ -144,35 +127,6 @@ class MLPCritic(nn.Module):
 
     def forward(self, obs):
         return torch.squeeze(self.v_net(obs), -1) # Critical to ensure v has right shape.
-
-def mask_constructor(action_space):
-    action_limits = zip(action_space.low, action_space.high)
-    low_open, high_open = lambda l: l == float('-inf'), lambda h: h == float('inf')
-    closed_mask, open_above_mask, open_below_mask = [], [], []
-    for low, high in action_limits:
-        # For two-sided limits, we need both limit bounds to calculate logp diff.
-        # Function _log_prob_from_distribution needs correction in the form of:
-        # 2 * (a + F.softplus(-2 * a)) - np.log(2 * (high - low))
-        # Where a is (pre-squashed) action and high and low are action space bounds.
-        # The second term here is supplied to the Actor as a 'correction' tensor in kwargs,
-        # And a mask of fully closed action dimensions is passed to calculate first term.
-        if not low_open(low) and not high_open(high):
-            closed_mask += [1]
-            open_above_mask += [0]
-            open_below_mask += [0]
-        # For one-sided limits, logp diff is always just -a, where a is the presquashed action.
-        # The sum of the open_above and open_below masks is given to the Actor as mask
-        # for this logp correction. Masks are kept separate for action-mapping purposes.
-        elif not high_open(high) or not low_open(low):
-            closed_mask += [0]
-            open_above_mask += [1 if high_open(high) else 0]
-            open_below_mask += [1 if low_open(low) else 0]
-        # Fully open action dimensions require no action-mapping or logp correction.
-        else:
-            closed_mask += [0]
-            open_above_mask += [0]
-            open_below_mask += [0]
-    return tuple([torch.as_tensor(el) for el in [closed_mask, open_above_mask, open_below_mask]])
 
 
 class MLPActorCritic(nn.Module):
@@ -189,7 +143,6 @@ class MLPActorCritic(nn.Module):
 
         obs_dim = observation_space.shape[0]
 
-
         # Gather action space limits, create lob prob correction funcs, use Gaussian Actor
         # if action space is Box
         if isinstance(action_space, Box):
@@ -197,11 +150,18 @@ class MLPActorCritic(nn.Module):
             err_str = "multidimensional action space shape not supported by MLPGaussianActor"
             assert len(action_space.shape) == 1, err_str
 
-            # Get action space bounds and masks specifying closed and half-open dims
-            self.lows, self.highs = np.array(action_space.low), np.array(action_space.high)
-            self.lows = torch.as_tensor(np.nan_to_num(self.lows, neginf=0, posinf=0))
-            self.highs = torch.as_tensor(np.nan_to_num(self.highs, neginf=0, posinf=0))
-            self.closed, self.open_above, self.open_below = mask_constructor(action_space)
+            # Get squash parameter and validate action space bounds
+            self.squash = (action_space.low[0] != float('-inf'))
+            if self.squash:
+                err_str = "closed action spaces must be [-1, 1]^n"
+                assert all([low == -1 for low in action_space.low]), err_str
+                assert all([high == 1 for high in action_space.high]), err_str
+            else:
+                err_str = "open action spaces must be open on all dimensions"
+                assert all([low == float('-inf') for low in action_space.low]), err_str
+                assert all([high == float('-inf') for hgih in action_space.high]), err_str
+
+            
             # Build Policy (pass in corrections to log probs as lambdas taking action)
             self.pi = MLPGaussianActor(obs_dim,
                                        action_space.shape[0],
@@ -209,9 +169,7 @@ class MLPActorCritic(nn.Module):
                                        activation,
                                        std_dim=std_dim,
                                        network_std=False,
-                                       closed_mask=self.closed,
-                                       half_open_mask=self.open_above + self.open_below,
-                                       correction=-torch.log(2 * (self.highs - self.lows)))
+                                       squash=self.squash)
 
         # Use Categorical Actor if action space is Discrete
         elif isinstance(action_space, Discrete):
@@ -232,13 +190,8 @@ class MLPActorCritic(nn.Module):
             else:
                 a = pi.sample()
             logp_a = self.pi._log_prob_from_distribution(pi, a)
-            if not self.is_discrete:
-                # Map actions to squashed action space using masks generated in __init__.
-                lows, highs = self.lows, self.highs
-                a = np.where(self.closed, lows + (highs - lows) * (np.tanh(a) + 1) / 2, a)
-                a = np.where(self.open_above, lows + torch.from_numpy(np.exp(a)), a)
-                a = np.where(self.open_below, highs - torch.from_numpy(np.exp(a)), a)
-                a = np.clip(a, lows, highs)
+            if not self.is_discrete and self.squash:
+                a = torch.tanh(a)
             v = self.v(obs)
         return np.array(a), v.numpy(), logp_a.numpy()
 
