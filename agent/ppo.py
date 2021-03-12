@@ -113,6 +113,7 @@ def ppo(env_fn,
         lam=0.97,
         max_ep_len=1000,
         target_kl=0.01,
+        entropy_reg=False,
         logger_kwargs=dict(),
         save_freq=25,
         sweep=True,
@@ -191,7 +192,8 @@ def ppo(env_fn,
         max_ep_len (int): Maximum length of trajectory / episode / rollout.
         target_kl (float): Roughly what KL divergence we think is appropriate
             between new and old policies after an update. This will get used
-            for early stopping. (Usually small, 0.01 or 0.05.)
+            for early stopping. (Usually small, 0.01 or 0.05.) If the target_kl
+            is None then we do not enable early stopping at all.
         logger_kwargs (dict): Keyword args for EpochLogger.
         save_freq (int): How often (in terms of gap between epochs) to save
             the current policy and value function.
@@ -273,14 +275,15 @@ def ppo(env_fn,
         loss_pi = -(torch.min(ratio * adv, clip_adv)).mean()
 
         # Useful extra info
-        approx_kl = (logp_old - logp).mean().item()
+        approx_kl = (logp - logp_old).mean().item()
         ent = pi.entropy().mean().item()
         clipped = ratio.gt(1+clip_ratio) | ratio.lt(1-clip_ratio)
         clipfrac = torch.as_tensor(clipped, dtype=torch.float32).mean().item()
         pi_info = dict(kl=approx_kl, ent=ent, cf=clipfrac)
         
         # Add distribution entropy to loss
-        loss_pi -= 0.01 * ent
+        if entropy_reg:
+            loss_pi -= 0.01 * ent
 
         return loss_pi, pi_info
 
@@ -311,9 +314,9 @@ def ppo(env_fn,
             pi_optimizer.zero_grad()
             loss_pi, pi_info = compute_loss_pi(data)
             kl = mpi_avg(pi_info['kl'])
-            #if kl > 2 * target_kl:
-            #    logger.log('Early stopping at step %d due to reaching max kl.'%i)
-            #    break
+            if target_kl is not None and kl > 2 * target_kl:
+                logger.log('Early stopping at step %d due to reaching max kl.'%i)
+                break
             loss_pi.backward()
             mpi_avg_grads(ac.pi)    # average grads across MPI processes
             pi_optimizer.step()
@@ -441,8 +444,7 @@ if __name__ == '__main__':
     parser.add_argument('--dmc', type=parse_boolean, default=True)
     parser.add_argument('--sweep', type=parse_boolean, default=True)
     parser.add_argument('--video', type=parse_boolean, default=True)
-    parser.add_argument('--hid', type=int, default=64)
-    parser.add_argument('--l', type=int, default=2)
+    parser.add_argument('--hid', type=int, default=(64, 32), nargs="+")
 
     parser.add_argument('--seed', '-s', type=int, default=0)
     parser.add_argument('--cpu', type=int, default=1)
@@ -458,13 +460,16 @@ if __name__ == '__main__':
     parser.add_argument('--lam', type=float, default=0.97)
     parser.add_argument('--target_kl', type=float, default=0.01)
     parser.add_argument('--std_dim', type=int, default=1)
+    parser.add_argument('--std_value', type=float, default=None)
     parser.add_argument('--network_std', type=parse_boolean, default=False)
+    parser.add_argument('--entropy_reg', type=parse_boolean, default=False)
 
     args = parser.parse_args()
     mpi_fork(args.cpu)  # run parallel code with mpi
     ac_kwargs = default_ac_kwargs
     ac_kwargs['std_dim'] = args.std_dim
     ac_kwargs['network_std'] = args.network_std
+    ac_kwargs['std_value'] = args.std_value
 
     from spinup.utils.run_utils import setup_logger_kwargs
     logger_kwargs = setup_logger_kwargs(args.exp_name, args.seed)
@@ -475,7 +480,7 @@ if __name__ == '__main__':
                                   task_name=args.task_name,
                                   seed=args.seed),
             actor_critic=core.MLPActorCritic,
-            hidden_sizes=(64, 32),
+            hidden_sizes=args.hid,
             ac_kwargs=ac_kwargs,
             gamma=args.gamma,
             clip_ratio=args.clip_ratio,
@@ -483,6 +488,7 @@ if __name__ == '__main__':
             vf_lr=args.vf_lr,
             lam=args.lam,
             target_kl=args.target_kl,
+            entropy_reg=args.entropy_reg,
             seed=args.seed,
             steps_per_epoch=args.steps,
             epochs=args.epochs,
@@ -494,7 +500,7 @@ if __name__ == '__main__':
     else:
         ppo(lambda : gym.make(args.env),
             actor_critic=core.MLPActorCritic,
-            hidden_sizes=[args.hid]*args.l,
+            hidden_sizes=args.hid,
             ac_kwargs=ac_kwargs,
             gamma=args.gamma,
             clip_ratio=args.clip_ratio,
@@ -502,6 +508,7 @@ if __name__ == '__main__':
             vf_lr=args.vf_lr,
             lam=args.lam,
             target_kl=args.target_kl,
+            entropy_reg=args.entropy_reg,
             seed=args.seed,
             steps_per_epoch=args.steps,
             epochs=args.epochs,

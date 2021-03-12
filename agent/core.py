@@ -88,6 +88,7 @@ class MLPGaussianActor(Actor):
                  activation,
                  std_dim=1,
                  network_std=False,
+                 std_value=None,
                  squash=True):
         super().__init__()
 
@@ -96,6 +97,8 @@ class MLPGaussianActor(Actor):
         self.base_net = mlp([obs_dim] + list(hidden_sizes), activation)
         self.mu_layer = nn.Sequential(nn.Linear(hidden_sizes[-1], act_dim), nn.Tanh())
         assert std_dim in [0, 1]
+        if std_value is not None:
+            self.log_std = np.log(std_value) * torch.eye(act_dim)
         if network_std:
             self.log_layer = nn.Linear(hidden_sizes[-1], pow(act_dim, std_dim))
         else:
@@ -138,7 +141,8 @@ class MLPActorCritic(nn.Module):
                  hidden_sizes=(64,64),
                  activation=nn.Tanh,
                  std_dim=1,
-                 network_std=False):
+                 network_std=False,
+                 std_value=None):
         super().__init__()
 
         obs_dim = observation_space.shape[0]
