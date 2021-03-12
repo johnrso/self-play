@@ -47,6 +47,17 @@ def mlp(sizes, activation, output_activation=nn.Identity):
 def count_vars(module):
     return sum([np.prod(p.shape) for p in module.parameters()])
 
+def validate_action_bounds(action_space):
+    bounded = (action_space.low[0] != float('-inf'))
+    if bounded:
+        err_str = "closed action spaces must be [-1, 1]^n"
+        assert all([low == -1 for low in action_space.low]), err_str
+        assert all([high == 1 for high in action_space.high]), err_str
+    else:
+        err_str = "open action spaces must be open on all dimensions"
+        assert all([low == float('-inf') for low in action_space.low]), err_str
+        assert all([high == float('inf') for high in action_space.high]), err_str
+
 
 def discount_cumsum(x, discount):
     """
@@ -117,8 +128,8 @@ class MLPGaussianActor(Actor):
         # Last axis sum needed for Torch Distribution
         logp_pi = pi.log_prob(act).sum(axis=-1)
         # Make adjustment to log prob if squashing
-#        if self.squash:
-#            logp_pi += (2 * (act + F.softplus(-2 * act) - np.log(2))).sum(axis=-1)
+        if self.squash:
+            logp_pi += (2 * (act + F.softplus(-2 * act) - np.log(2))).sum(axis=-1)
         return logp_pi
 
 
@@ -142,7 +153,8 @@ class MLPActorCritic(nn.Module):
                  activation=nn.Tanh,
                  std_dim=1,
                  network_std=False,
-                 std_value=None):
+                 std_value=None,
+                 squash=False):
         super().__init__()
 
         obs_dim = observation_space.shape[0]
@@ -154,17 +166,10 @@ class MLPActorCritic(nn.Module):
             err_str = "multidimensional action space shape not supported by MLPGaussianActor"
             assert len(action_space.shape) == 1, err_str
 
-            # Get squash parameter and validate action space bounds
-            self.squash = (action_space.low[0] != float('-inf'))
-            if self.squash:
-                err_str = "closed action spaces must be [-1, 1]^n"
-                assert all([low == -1 for low in action_space.low]), err_str
-                assert all([high == 1 for high in action_space.high]), err_str
-            else:
-                err_str = "open action spaces must be open on all dimensions"
-                assert all([low == float('-inf') for low in action_space.low]), err_str
-                assert all([high == float('-inf') for hgih in action_space.high]), err_str
+            self.squash = squash
 
+            # Get bounded parameter and validate action space bounds
+            validate_bounds(action_space)
             
             # Build Policy (pass in corrections to log probs as lambdas taking action)
             self.pi = MLPGaussianActor(obs_dim,
@@ -173,7 +178,7 @@ class MLPActorCritic(nn.Module):
                                        activation,
                                        std_dim=std_dim,
                                        network_std=False,
-                                       squash=self.squash)
+                                       squash=squash)
 
         # Use Categorical Actor if action space is Discrete
         elif isinstance(action_space, Discrete):

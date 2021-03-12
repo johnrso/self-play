@@ -463,6 +463,7 @@ if __name__ == '__main__':
     parser.add_argument('--std_value', type=float, default=None)
     parser.add_argument('--network_std', type=parse_boolean, default=False)
     parser.add_argument('--entropy_reg', type=parse_boolean, default=False)
+    parser.add_argument('--squash', type=parse_boolean, default=True)
 
     args = parser.parse_args()
     mpi_fork(args.cpu)  # run parallel code with mpi
@@ -470,6 +471,7 @@ if __name__ == '__main__':
     ac_kwargs['std_dim'] = args.std_dim
     ac_kwargs['network_std'] = args.network_std
     ac_kwargs['std_value'] = args.std_value
+    ac_kwargs['squash'] = args.squash
 
     from spinup.utils.run_utils import setup_logger_kwargs
     logger_kwargs = setup_logger_kwargs(args.exp_name, args.seed)
