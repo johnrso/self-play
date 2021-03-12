@@ -47,7 +47,7 @@ def mlp(sizes, activation, output_activation=nn.Identity):
 def count_vars(module):
     return sum([np.prod(p.shape) for p in module.parameters()])
 
-def validate_action_bounds(action_space):
+def validate_bounds(action_space):
     bounded = (action_space.low[0] != float('-inf'))
     if bounded:
         err_str = "closed action spaces must be [-1, 1]^n"
@@ -98,8 +98,8 @@ class MLPGaussianActor(Actor):
                  hidden_sizes,
                  activation,
                  std_dim=1,
-                 network_std=False,
-                 std_value=None,
+                 std_source=None,
+                 std_value=0.5,
                  squash=True):
         super().__init__()
 
@@ -108,19 +108,19 @@ class MLPGaussianActor(Actor):
         self.base_net = mlp([obs_dim] + list(hidden_sizes), activation)
         self.mu_layer = nn.Sequential(nn.Linear(hidden_sizes[-1], act_dim), nn.Tanh())
         assert std_dim in [0, 1]
-        if std_value is not None:
-            self.log_std = np.log(std_value) * torch.eye(act_dim)
-        if network_std:
-            self.log_layer = nn.Linear(hidden_sizes[-1], pow(act_dim, std_dim))
+        if std_source is None:
+            self.log_std = torch.tensor(np.log(std_value))
+        elif not std_source:
+            self.log_std = nn.Parameter(torch.squeeze(np.log(std_value)*torch.ones(pow(act_dim, std_dim))))
         else:
-            self.log_std = nn.Parameter(torch.squeeze(-0.5*torch.ones(pow(act_dim, std_dim))))
+            self.log_layer = nn.Linear(hidden_sizes[-1], pow(act_dim, std_dim))
         self.std_dim = std_dim
-        self.network_std = network_std
+        self.std_source = std_source
         self.squash = squash
 
     def _distribution(self, obs):
         mu = self.mu_layer(self.base_net(obs))
-        log_std = self.log_std if not self.network_std else self.log_layer(self.base_net(obs)) 
+        log_std = self.log_std if not self.std_source else self.log_layer(self.base_net(obs)) 
         std = torch.exp(torch.clamp(log_std, LOG_STD_MIN, LOG_STD_MAX))
         return Normal(mu, std)
 
@@ -152,8 +152,8 @@ class MLPActorCritic(nn.Module):
                  hidden_sizes=(64,64),
                  activation=nn.Tanh,
                  std_dim=1,
-                 network_std=False,
-                 std_value=None,
+                 std_source=False,
+                 std_value=0.5,
                  squash=False):
         super().__init__()
 
@@ -177,7 +177,8 @@ class MLPActorCritic(nn.Module):
                                        hidden_sizes,
                                        activation,
                                        std_dim=std_dim,
-                                       network_std=False,
+                                       std_value=std_value,
+                                       std_source=std_source,
                                        squash=squash)
 
         # Use Categorical Actor if action space is Discrete
@@ -193,7 +194,7 @@ class MLPActorCritic(nn.Module):
             pi = self.pi._distribution(obs)
             if deterministic and not self.is_discrete:
                 a = pi.mean
-            elif deterministic and self.is_discrete:
+            elif deterministic:
                 values = pi.enumerate_support()
                 a = values[torch.argmax(torch.tensor([pi.log_prob(act) for act in values]))]
             else:

@@ -113,6 +113,7 @@ def ppo(env_fn,
         lam=0.97,
         max_ep_len=1000,
         target_kl=0.01,
+        clip_kl=False,
         entropy_reg=False,
         logger_kwargs=dict(),
         save_freq=25,
@@ -192,8 +193,8 @@ def ppo(env_fn,
         max_ep_len (int): Maximum length of trajectory / episode / rollout.
         target_kl (float): Roughly what KL divergence we think is appropriate
             between new and old policies after an update. This will get used
-            for early stopping. (Usually small, 0.01 or 0.05.) If the target_kl
-            is None then we do not enable early stopping at all.
+            for early stopping if clip_kl is true. (Usually small, 0.01 or 0.05.)
+        clip_kl (bool): Whether to stop early on exceeding twice target_kl.
         logger_kwargs (dict): Keyword args for EpochLogger.
         save_freq (int): How often (in terms of gap between epochs) to save
             the current policy and value function.
@@ -250,8 +251,7 @@ def ppo(env_fn,
     ac = actor_critic(env.observation_space,
                       env.action_space,
                       hidden_sizes=hidden_sizes,
-                      std_dim=args.std_dim,
-                      network_std=args.network_std)
+                      **ac_kwargs)
 
     # Sync params across processes
     sync_params(ac)
@@ -314,7 +314,7 @@ def ppo(env_fn,
             pi_optimizer.zero_grad()
             loss_pi, pi_info = compute_loss_pi(data)
             kl = mpi_avg(pi_info['kl'])
-            if target_kl is not None and kl > 2 * target_kl:
+            if clip_kl and kl > 2 * target_kl:
                 logger.log('Early stopping at step %d due to reaching max kl.'%i)
                 break
             loss_pi.backward()
@@ -435,6 +435,17 @@ def parse_boolean(arg):
     else:
         pass
 
+def parse_std_source(arg):
+    arg = str(arg).upper()
+    if 'NETWORK'.startswith(arg):
+        return True
+    if 'PARAMETER'.startswith(arg):
+        return False
+    if 'CONSTANT'.startswith(arg):
+        return None
+    else:
+        pass
+
 if __name__ == '__main__':
     import argparse
     parser = argparse.ArgumentParser()
@@ -459,9 +470,10 @@ if __name__ == '__main__':
     parser.add_argument('--vf_lr', type=float, default=0.001)
     parser.add_argument('--lam', type=float, default=0.97)
     parser.add_argument('--target_kl', type=float, default=0.01)
+    parser.add_argument('--clip_kl', type=parse_boolean, default=True)
     parser.add_argument('--std_dim', type=int, default=1)
-    parser.add_argument('--std_value', type=float, default=None)
-    parser.add_argument('--network_std', type=parse_boolean, default=False)
+    parser.add_argument('--std_value', type=float, default=0.5)
+    parser.add_argument('--std_source', type=parse_std_source, default=None)
     parser.add_argument('--entropy_reg', type=parse_boolean, default=False)
     parser.add_argument('--squash', type=parse_boolean, default=True)
 
@@ -469,7 +481,7 @@ if __name__ == '__main__':
     mpi_fork(args.cpu)  # run parallel code with mpi
     ac_kwargs = default_ac_kwargs
     ac_kwargs['std_dim'] = args.std_dim
-    ac_kwargs['network_std'] = args.network_std
+    ac_kwargs['std_source'] = args.std_source
     ac_kwargs['std_value'] = args.std_value
     ac_kwargs['squash'] = args.squash
 
@@ -490,6 +502,7 @@ if __name__ == '__main__':
             vf_lr=args.vf_lr,
             lam=args.lam,
             target_kl=args.target_kl,
+            clip_kl=args.clip_kl,
             entropy_reg=args.entropy_reg,
             seed=args.seed,
             steps_per_epoch=args.steps,
@@ -510,6 +523,7 @@ if __name__ == '__main__':
             vf_lr=args.vf_lr,
             lam=args.lam,
             target_kl=args.target_kl,
+            clip_kl=args.clip_kl,
             entropy_reg=args.entropy_reg,
             seed=args.seed,
             steps_per_epoch=args.steps,
