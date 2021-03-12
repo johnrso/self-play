@@ -278,6 +278,9 @@ def ppo(env_fn,
         clipped = ratio.gt(1+clip_ratio) | ratio.lt(1-clip_ratio)
         clipfrac = torch.as_tensor(clipped, dtype=torch.float32).mean().item()
         pi_info = dict(kl=approx_kl, ent=ent, cf=clipfrac)
+        
+        # Add distribution entropy to loss
+        loss_pi -= 0.01 * ent
 
         return loss_pi, pi_info
 
@@ -308,9 +311,9 @@ def ppo(env_fn,
             pi_optimizer.zero_grad()
             loss_pi, pi_info = compute_loss_pi(data)
             kl = mpi_avg(pi_info['kl'])
-#            if kl > 2 * target_kl:
-#                logger.log('Early stopping at step %d due to reaching max kl.'%i)
-#                break
+            #if kl > 2 * target_kl:
+            #    logger.log('Early stopping at step %d due to reaching max kl.'%i)
+            #    break
             loss_pi.backward()
             mpi_avg_grads(ac.pi)    # average grads across MPI processes
             pi_optimizer.step()
@@ -472,7 +475,7 @@ if __name__ == '__main__':
                                   task_name=args.task_name,
                                   seed=args.seed),
             actor_critic=core.MLPActorCritic,
-            hidden_sizes=[args.hid]*args.l,
+            hidden_sizes=(64, 32),
             ac_kwargs=ac_kwargs,
             gamma=args.gamma,
             clip_ratio=args.clip_ratio,
