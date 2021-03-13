@@ -15,7 +15,7 @@ metric:
   name: eval_returns
   goal: maximize
 parameters:
-  env:
+  gym_env:
     values: ["LunarLanderContinuous-v2",
              "CartPole-v1",
              "MountainCar-v0",
@@ -23,9 +23,7 @@ parameters:
              "Hopper-v2",
              "BipedalWalker-v3",
              "Walker2d-v2",
-             "Ant-v3",
-             "Humanoid-v3",
-             "HumanoidStandup-v2"]
+             "Ant-v3"]
   dmc_env: 
     values: ["quadruped run",
              "cheetah run",
@@ -50,9 +48,9 @@ parameters:
     min: .96
     max: .99
   epochs:
-    values: [75, 100, 125, 150, 200, 250, 400]
+    values: [150, 200, 250, 400, 750, 1000]
   target_kl:
-    min: 0.005
+    min: 0.0005
     max: 0.05
   clip_kl:
     values: [True, False]
