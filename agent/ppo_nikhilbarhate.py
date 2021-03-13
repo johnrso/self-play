@@ -139,7 +139,7 @@ def main():
     ############## Hyperparameters ##############
     env_name = "LunarLanderContinuous-v2"
     render = True
-    solved_reward = 300         # stop training if avg_reward > solved_reward
+    solved_reward = 200         # stop training if avg_reward > solved_reward
     log_interval = 20           # print avg reward in the interval
     max_episodes = 10000        # max training episodes
     max_timesteps = 1500        # max timesteps in one episode
