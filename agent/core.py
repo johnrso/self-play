@@ -108,9 +108,7 @@ class MLPGaussianActor(Actor):
 
         # Initialize Mean Network Architecture
         self.base_net = mlp([obs_dim] + list(hidden_sizes), activation)
-        self.mu_layer = nn.Linear(hidden_sizes[-1], act_dim)
-        if not squash:
-            self.mu_layer = nn.Sequential(self.mu_layer, nn.Tanh())
+        self.mu_layer = nn.Sequential(nn.Linear(hidden_sizes[-1], act_dim), nn.Tanh())
    
         # Initialize Variance Parameters / Network Architecture
         assert std_dim in [0, 1]
