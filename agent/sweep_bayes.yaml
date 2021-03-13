@@ -48,7 +48,7 @@ parameters:
     min: .96
     max: .99
   epochs:
-    values: [150, 200, 250, 400, 750, 1000]
+    values: [150, 200, 250, 400]
   target_kl:
     min: 0.0005
     max: 0.05
