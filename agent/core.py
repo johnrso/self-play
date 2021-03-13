@@ -57,6 +57,7 @@ def validate_bounds(action_space):
         err_str = "open action spaces must be open on all dimensions"
         assert all([low == float('-inf') for low in action_space.low]), err_str
         assert all([high == float('inf') for high in action_space.high]), err_str
+    return bounded
 
 
 def discount_cumsum(x, discount):
@@ -102,11 +103,16 @@ class MLPGaussianActor(Actor):
                  std_value=0.5,
                  squash=True):
         super().__init__()
-
-        # Initialize Gaussian Parameters and Network Architecture
         self.act_dim = act_dim
+        self.squash = squash
+
+        # Initialize Mean Network Architecture
         self.base_net = mlp([obs_dim] + list(hidden_sizes), activation)
-        self.mu_layer = nn.Sequential(nn.Linear(hidden_sizes[-1], act_dim), nn.Tanh())
+        self.mu_layer = nn.Linear(hidden_sizes[-1], act_dim)
+        if not squash:
+            self.mu_layer = nn.Sequential(self.mu_layer, nn.Tanh())
+   
+        # Initialize Variance Parameters / Network Architecture
         assert std_dim in [0, 1]
         if std_source is None:
             self.log_std = torch.tensor(np.log(std_value))
@@ -116,7 +122,6 @@ class MLPGaussianActor(Actor):
             self.log_layer = nn.Linear(hidden_sizes[-1], pow(act_dim, std_dim))
         self.std_dim = std_dim
         self.std_source = std_source
-        self.squash = squash
 
     def _distribution(self, obs):
         mu = self.mu_layer(self.base_net(obs))
@@ -169,7 +174,7 @@ class MLPActorCritic(nn.Module):
             self.squash = squash
 
             # Get bounded parameter and validate action space bounds
-            validate_bounds(action_space)
+            self.bounded = validate_bounds(action_space)
             
             # Build Policy (pass in corrections to log probs as lambdas taking action)
             self.pi = MLPGaussianActor(obs_dim,
@@ -202,6 +207,8 @@ class MLPActorCritic(nn.Module):
             logp_a = self.pi._log_prob_from_distribution(pi, a)
             if not self.is_discrete and self.squash:
                 a = torch.tanh(a)
+            elif not self.is_discrete and self.bounded:
+                a = torch.clamp(a, -1, 1)
             v = self.v(obs)
         return np.array(a), v.numpy(), logp_a.numpy()
 
