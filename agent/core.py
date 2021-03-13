@@ -205,8 +205,6 @@ class MLPActorCritic(nn.Module):
             logp_a = self.pi._log_prob_from_distribution(pi, a)
             if not self.is_discrete and self.squash:
                 a = torch.tanh(a)
-            elif not self.is_discrete and self.bounded:
-                a = torch.clamp(a, -1, 1)
             v = self.v(obs)
         return np.array(a), v.numpy(), logp_a.numpy()
 
