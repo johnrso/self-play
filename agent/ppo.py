@@ -115,6 +115,7 @@ def ppo(env_fn,
         target_kl=0.01,
         clip_kl=False,
         entropy_reg=False,
+        entropy_coeff=0.01,
         logger_kwargs=dict(),
         save_freq=25,
         sweep=True,
@@ -195,6 +196,9 @@ def ppo(env_fn,
             between new and old policies after an update. This will get used
             for early stopping if clip_kl is true. (Usually small, 0.01 or 0.05.)
         clip_kl (bool): Whether to stop early on exceeding twice target_kl.
+        entropy_reg (bool): Whether to include regularization term proportional to
+            action distribution's entropy in the loss.
+        entropy_coeff (float): Coefficient of entropy for loss regularization term.
         logger_kwargs (dict): Keyword args for EpochLogger.
         save_freq (int): How often (in terms of gap between epochs) to save
             the current policy and value function.
@@ -283,7 +287,7 @@ def ppo(env_fn,
         
         # Add distribution entropy to loss
         if entropy_reg:
-            loss_pi -= 0.01 * ent
+            loss_pi -= entropy_coeff * ent
 
         return loss_pi, pi_info
 
@@ -475,6 +479,7 @@ if __name__ == '__main__':
     parser.add_argument('--std_value', type=float, default=0.5)
     parser.add_argument('--std_source', type=parse_std_source, default=None)
     parser.add_argument('--entropy_reg', type=parse_boolean, default=False)
+    parser.add_argument('--entropy_coeff', type=float, default=0.01)
     parser.add_argument('--squash', type=parse_boolean, default=True)
 
     args = parser.parse_args()
@@ -504,6 +509,7 @@ if __name__ == '__main__':
             target_kl=args.target_kl,
             clip_kl=args.clip_kl,
             entropy_reg=args.entropy_reg,
+            entropy_coeff=args.entropy_coeff,
             seed=args.seed,
             steps_per_epoch=args.steps,
             epochs=args.epochs,
@@ -525,6 +531,7 @@ if __name__ == '__main__':
             target_kl=args.target_kl,
             clip_kl=args.clip_kl,
             entropy_reg=args.entropy_reg,
+            entropy_coeff=args.entropy_coeff,
             seed=args.seed,
             steps_per_epoch=args.steps,
             epochs=args.epochs,
