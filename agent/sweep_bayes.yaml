@@ -26,15 +26,14 @@ parameters:
              "Ant-v3",
              "Humanoid-v3",
              "HumanoidStandup-v2"]
-  dmc:
+  dmc_env: 
+    values: ["quadruped run",
+             "cheetah run",
+             "humanoid run",
+             "swimmer swim",
+             "fish swim"]
+  use_dmc:
     values: ["True", "False"]
-  domain_name:
-    values: ["quadruped",
-             "cheetah",
-             "swimmer",
-             "fish"]
-  task_name:
-    values: [
   gamma:
     min: 0.99
     max: 0.999

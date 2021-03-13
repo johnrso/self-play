@@ -119,9 +119,7 @@ def ppo(env_fn,
         logger_kwargs=dict(),
         save_freq=25,
         sweep=True,
-        video=False,
-        domain_name='cartpole',
-        task_name='balance'):
+        video=False):
     """
     Proximal Policy Optimization (by clipping),
     with early stopping based on approximate KL
@@ -235,10 +233,7 @@ def ppo(env_fn,
             lam = config.lam
             target_kl = config.target_kl
 
-        if args.dmc:
-            wandb.run.name = "{}_{}_".format(domain_name, task_name) + wandb.run.name
-        else:
-            wandb.run.name = "{}_".format(env_name) + wandb.run.name
+        wandb.run.name = "{}_".format(env_name) + wandb.run.name
 
 
     # Set up logger and save configuration
@@ -453,10 +448,9 @@ def parse_std_source(arg):
 if __name__ == '__main__':
     import argparse
     parser = argparse.ArgumentParser()
-    parser.add_argument('--env', type=str, default='CartPole-v1')
-    parser.add_argument('--domain_name', type=str, default='quadruped')
-    parser.add_argument('--task_name', type=str, default='run')
-    parser.add_argument('--dmc', type=parse_boolean, default=True)
+    parser.add_argument('--gym_env', type=str, default='CartPole-v1')
+    parser.add_argument('--dmc_env', type=str, default='quadruped run')
+    parser.add_argument('--use_dmc', type=parse_boolean, default=True)
     parser.add_argument('--sweep', type=parse_boolean, default=True)
     parser.add_argument('--video', type=parse_boolean, default=True)
     parser.add_argument('--hid', type=int, default=(64, 32), nargs="+")
@@ -494,9 +488,10 @@ if __name__ == '__main__':
     logger_kwargs = setup_logger_kwargs(args.exp_name, args.seed)
 
 
-    if args.dmc:
-        ppo(lambda : dmc2gym.make(domain_name=args.domain_name,
-                                  task_name=args.task_name,
+    if args.use_dmc:
+        dmc_identifiers = args.dmc_env.split()
+        ppo(lambda : dmc2gym.make(domain_name=dmc_identifiers[0],
+                                  task_name=dmc_identifiers[1],
                                   seed=args.seed),
             actor_critic=core.MLPActorCritic,
             hidden_sizes=args.hid,
@@ -515,11 +510,9 @@ if __name__ == '__main__':
             epochs=args.epochs,
             logger_kwargs=logger_kwargs,
             sweep=args.sweep,
-            video=args.video,
-            domain_name=args.domain_name,
-            task_name=args.task_name)
+            video=args.video)
     else:
-        ppo(lambda : gym.make(args.env),
+        ppo(lambda : gym.make(args.gym_env),
             actor_critic=core.MLPActorCritic,
             hidden_sizes=args.hid,
             ac_kwargs=ac_kwargs,
@@ -537,7 +530,5 @@ if __name__ == '__main__':
             epochs=args.epochs,
             logger_kwargs=logger_kwargs,
             sweep=args.sweep,
-            video=args.video,
-            domain_name=args.domain_name,
-            task_name=args.task_name)
+            video=args.video)
 
