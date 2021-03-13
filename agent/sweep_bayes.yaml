@@ -1,12 +1,12 @@
+project: ppo-hyperparameter-sweep
+entity: self-play-project
 program: ppo.py
 command:
   - ${env}
   - python
   - ${program}
-  - "--domain_name"
-  - "cheetah"
-  - "--task_name"
-  - "run"
+  - "--cpu"
+  - 2
   - "--video"
   - "True"
   - ${args}
@@ -15,6 +15,26 @@ metric:
   name: eval_returns
   goal: maximize
 parameters:
+  env:
+    values: ["LunarLanderContinuous-v2",
+             "CartPole-v1",
+             "MountainCar-v0",
+             "MountainCarContinuous-v0",
+             "Hopper-v2",
+             "BipedalWalker-v3",
+             "Walker2d-v2",
+             "Ant-v3",
+             "Humanoid-v3",
+             "HumanoidStandup-v2"]
+  dmc:
+    values: ["True", "False"]
+  domain_name:
+    values: ["quadruped",
+             "cheetah",
+             "swimmer",
+             "fish"]
+  task_name:
+    values: [
   gamma:
     min: 0.99
     max: 0.999
@@ -30,6 +50,21 @@ parameters:
   lam:
     min: .96
     max: .99
+  epochs:
+    values: [75, 100, 125, 150, 200, 250, 400]
   target_kl:
     min: 0.005
     max: 0.05
+  clip_kl:
+    values: [True, False]
+  entropy_reg:
+    values: [True, False]
+  std_dim:
+    values: [0, 1]
+  std_value:
+    min: 0.1
+    max: 1
+  squash:
+    values: [True, False]
+  std_source:
+    values: ["Network", "Parameter", "Constant"]
