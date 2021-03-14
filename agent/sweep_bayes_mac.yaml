@@ -1,0 +1,69 @@
+project: ppo-hyperparameter-sweep
+entity: self-play-project
+program: ppo.py
+command:
+  - ${env}
+  - caffeinate
+  - "-s"
+  - python
+  - ${program}
+  - "--cpu"
+  - 4
+  - "--video"
+  - "True"
+  - ${args}
+method: bayes
+metric:
+  name: eval_returns
+  goal: maximize
+parameters:
+  gym_env:
+    values: ["LunarLanderContinuous-v2",
+             "CartPole-v1",
+             "MountainCar-v0",
+             "MountainCarContinuous-v0",
+             "Hopper-v2",
+             "BipedalWalker-v3",
+             "Walker2d-v2",
+             "Ant-v3"]
+  dmc_env: 
+    values: ["quadruped run",
+             "cheetah run",
+             "humanoid run",
+             "swimmer swim",
+             "fish swim"]
+  use_dmc:
+    values: ["True", "False"]
+  gamma:
+    min: 0.99
+    max: 0.999
+  clip_ratio:
+    min: .15
+    max: .25
+  pi_lr:
+    min: 0.0001
+    max: 0.0005
+  vf_lr:
+    min: 0.0001
+    max: 0.002
+  lam:
+    min: .96
+    max: .99
+  epochs:
+    values: [150, 200, 250, 400]
+  target_kl:
+    min: 0.0005
+    max: 0.05
+  clip_kl:
+    values: [True, False]
+  entropy_reg:
+    values: [True, False]
+  std_dim:
+    values: [0, 1]
+  std_value:
+    min: 0.1
+    max: 1
+  squash:
+    values: [True, False]
+  std_source:
+    values: ["Network", "Parameter", "Constant"]
