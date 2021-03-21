@@ -131,9 +131,10 @@ def discount_cumsum(x, discount):
 
 class MLPCategoricalActor(Actor):
 
-    def __init__(self, obs_dim, act_dim, hidden_sizes, activation):
+    def __init__(self, obs_dim, act_dim, hidden_sizes, activation, input_norm=False):
         super().__init__()
-        self.logits_net = mlp([obs_dim] + list(hidden_sizes) + [act_dim], activation)
+        sizes = [obs_dim] + list(hidden_sizes) + [act_dim]
+        self.logits_net = mlp(sizes, activation, input_norm=input_norm)
 
     def _distribution(self, obs):
         logits = self.logits_net(obs)
@@ -264,10 +265,10 @@ class MLPActorCritic(nn.Module):
                                           action_space.n, 
                                           [pi_width] * pi_depth, 
                                           activation,
-                                          input_norm=vf_input_norm)
+                                          input_norm=pi_input_norm)
 
         # build value function
-        self.v  = MLPCritic(obs_dim, [vf_width] * vf_depth, activation)
+        self.v  = MLPCritic(obs_dim, [vf_width] * vf_depth, activation, vf_input_norm)
 
     def step(self, obs, deterministic=False):
         with torch.no_grad():
