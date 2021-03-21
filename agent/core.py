@@ -238,7 +238,7 @@ class MLPActorCritic(nn.Module):
 
             # Get bounded parameter and validate action space bounds
             self.bounded = validate_bounds(action_space)
-            
+
             if squash:
                 self.squash = lambda a: torch.tanh(a)
             elif self.bounded:
@@ -260,6 +260,7 @@ class MLPActorCritic(nn.Module):
 
         # Use Categorical Actor if action space is Discrete
         elif isinstance(action_space, Discrete):
+            self.is_discrete = True
             self.squash = lambda a: a
             self.pi = MLPCategoricalActor(obs_dim, 
                                           action_space.n, 
