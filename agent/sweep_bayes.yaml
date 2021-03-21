@@ -6,7 +6,7 @@ command:
   - python
   - ${program}
   - "--cpu"
-  - 2
+  - 4
   - "--video"
   - "True"
   - ${args}
@@ -27,11 +27,40 @@ parameters:
   dmc_env: 
     values: ["quadruped run",
              "cheetah run",
-             "humanoid run",
-             "swimmer swim",
+             "swimmer swimmer6",
              "fish swim"]
   use_dmc:
     values: ["True", "False"]
+  
+  activation:
+    values: ["tanh", "relu"]
+  pi_width: 
+    values: [32, 64, 128, 256, 512]
+  pi_depth: 
+    values: [1, 2, 4, 8]
+  vf_width: 
+    values: [32, 64, 128]
+  vf_depth: 
+    values: [1, 2, 4, 8]
+  pi_weight_ratio:
+    values: [1, 0.01, 0]
+  pi_input_norm:
+    values: [True, False]
+  vf_input_norm:
+    values: [True, False]
+  
+  std_dim:
+    values: [0, 1]
+  std_value:
+    min: 0.1
+    max: 1
+  std_source:
+    values: ["Network", "Parameter", "Constant"]
+
+  epochs:
+    values: [75, 200, 400]
+  squash:
+    values: [True, False]
   gamma:
     min: 0.99
     max: 0.999
@@ -47,21 +76,27 @@ parameters:
   lam:
     min: .96
     max: .99
-  epochs:
-    values: [150, 200, 250, 400]
-  target_kl:
-    min: 0.0005
-    max: 0.05
-  clip_kl:
-    values: [True, False]
-  entropy_reg:
-    values: [True, False]
-  std_dim:
-    values: [0, 1]
-  std_value:
-    min: 0.1
-    max: 1
-  squash:
-    values: [True, False]
-  std_source:
-    values: ["Network", "Parameter", "Constant"]
+  
+  stop_metric:
+    values: ["Entropy", "KL", "Reverse KL", "Reference KL"]
+  min_entropy:
+    values: [0, 0.01, 0.1]
+  max_kl:
+    values: [0.01, 0.02, 0.05, 0.5, 3]
+  max_rev_kl:
+    values: [0.01, 0.02, 0.05, 0.5, 3]
+  max_ref_kl:
+    values: [0.5, 1, 3, 10]
+  
+  reg_metric:
+    values: ["Entropy", "KL", "Reverse KL", "Reference KL"]
+  entropy_coeff: 
+    values: [0, 0.01, 0.2]
+  kl_coeff:
+    values: [0, 0.01, 0.2]
+  rev_kl_coeff:
+    values: [0, 0.01, 0.2]
+  ref_kl_coeff:
+    values: [0, 0.0001, 0.01]
+
+
