@@ -6,6 +6,7 @@ from gym.spaces import Discrete, Box
 import time
 import core
 import torch.nn as nn
+from torch.distributions import Normal
 
 from utils.logx import EpochLogger
 from utils.mpi_pytorch import setup_pytorch_for_mpi, sync_params, mpi_avg_grads
@@ -14,10 +15,63 @@ import dmc2gym
 from dmc2gym.wrappers import DMCWrapper
 import os
 import wandb
-
+from enum import Enum
 
 # tmp
 os.environ['DISABLE_MUJOCO_RENDERING'] = '1'
+
+def parse_boolean(arg):
+    arg = str(arg).upper()
+    if 'TRUE'.startswith(arg):
+        return True
+    elif 'FALSE'.startswith(arg):
+        return False
+    else:
+        pass
+
+def parse_std_source(arg):
+    arg = str(arg).upper()
+    if 'NETWORK'.startswith(arg):
+        return True
+    if 'PARAMETER'.startswith(arg):
+        return False
+    if 'CONSTANT'.startswith(arg):
+        return None
+    else:
+        pass
+
+def parse_activation(arg):
+    arg = str(arg).upper()
+    if 'TANH'.startswith(arg):
+        return nn.Tanh
+    if 'RELU'.startswith(arg):
+        return nn.ReLU
+    if 'SIGMOID'.startswith(arg):
+        return nn.Sigmoid
+    else:
+        pass
+
+def parse_metric(arg):
+    arg = str(arg).upper()
+    if 'NONE'.startswith(arg):
+        return None
+    if 'ENTROPY'.startswith(arg):
+        return 'entropy'
+    if 'KL_DIVERGENCE'.startswith(arg) or \
+       'KL DIVERGENCE'.startswith(arg):
+        return 'kl'
+    if 'REVERSE_KL_DIVERGENCE'.startswith(arg) or \
+       'REVERSE KL DIVERGENCE'.startswith(arg) or \
+       'REV_KL_DIVERGENCE'.startswith(arg) or \
+       'REV KL DIVERGENCE'.startswith(arg):
+        return 'rev_kl'
+    if 'REFERENCE_KL_DIVERGENCE'.startswith(arg) or \
+       'REFERENCE KL DIVERGENCE'.startswith(arg) or \
+       'REF_KL_DIVERGENCE'.startswith(arg) or \
+       'REF KL DIVERGENCE'.startswith(arg):
+        return 'ref_kl'
+    else:
+        pass
 
 class PPOBuffer:
     """
@@ -92,15 +146,10 @@ class PPOBuffer:
                     adv=self.adv_buf, logp=self.logp_buf)
         return {k: torch.as_tensor(v, dtype=torch.float32) for k,v in data.items()}
 
-default_ac_kwargs = {
-    "activation": nn.Tanh,
-    "std_dim": 2
-}
 
 def ppo(env_fn,
         actor_critic=core.MLPActorCritic,
-        hidden_sizes=(64,64),
-        ac_kwargs=default_ac_kwargs,
+        ac_kwargs={},
         seed=0,
         steps_per_epoch=4000,
         epochs=50,
@@ -112,17 +161,18 @@ def ppo(env_fn,
         train_v_iters=80,
         lam=0.97,
         max_ep_len=1000,
-        target_kl=0.01,
-        clip_kl=False,
-        entropy_reg=False,
-        entropy_coeff=0.01,
+        stop_metric=None,
+        stop_cutoff=0.01,
+        reg_metric=None,
+        reg_coeff=0.01,
         logger_kwargs=dict(),
         save_freq=25,
         sweep=True,
         video=False):
     """
     Proximal Policy Optimization (by clipping),
-    with early stopping based on approximate KL
+    with early stopping based on one of several KL metrics or entropy
+    and regularization based on one of these metrics
     Args:
         env_fn : A function which creates a copy of the environment.
             The environment must satisfy the OpenAI Gym API.
@@ -165,9 +215,30 @@ def ppo(env_fn,
                                            | for the provided observations. (Critical:
                                            | make sure to flatten this!)
             ===========  ================  ======================================
-        hidden_sizes (tuple): A tuple of hidden sizes of the policy net.
         ac_kwargs (dict): Any kwargs appropriate for the ActorCritic object
-            you provided to PPO.
+            you provided to PPO. Specifically contains:
+                activation (nn.Module): An activation to use in policy/value network
+                    hidden layers.
+                std_dim (int): The dimension of the standard deviation used in policy
+                    network outputs. Either 0 (isotropic Gaussian) or 1 (anisotropic 
+                    Gaussian, but with a diagonal covariance matrix).
+                std_source (bool): Represents the source of the values of the variances
+                    used in policy network output distributions. If True, predict
+                    logarithms of standard deviations from network, if False, store
+                    logarithms as parameters, and if None, use constant standard deviation.
+                std_value (float): Standard deviation to use as constant if std_source is None.
+                squash (bool): Whether or not to squash actions drawn from distribution
+                    with tanh. If false but action space is still bounded, actions are clipped.
+                pi_width (int): Width of policy network hidden layers.
+                pi_depth (int): Number of policy network hidden layers.
+                vf_width (int): Width of value network hidden layers.
+                vf_depth (int): Number of value network hidden layers.
+                pi_weight_ratio (float): Ratio of initiliazation values of last layer of
+                    policy network to the default values. Used to lower initial policy variance.
+                pi_input_norm (bool): Whether to apply batch norm to inputs to the policy 
+                    network.
+                vf_input_norm (bool): Whether to apply batch norm to inputs to the value 
+                    network.
         seed (int): Seed for random number generators.
         steps_per_epoch (int): Number of steps of interaction (state-action pairs)
             for the agent and the environment in each epoch.
@@ -190,13 +261,13 @@ def ppo(env_fn,
         lam (float): Lambda for GAE-Lambda. (Always between 0 and 1,
             close to 1.)
         max_ep_len (int): Maximum length of trajectory / episode / rollout.
-        target_kl (float): Roughly what KL divergence we think is appropriate
-            between new and old policies after an update. This will get used
-            for early stopping if clip_kl is true. (Usually small, 0.01 or 0.05.)
-        clip_kl (bool): Whether to stop early on exceeding twice target_kl.
-        entropy_reg (bool): Whether to include regularization term proportional to
-            action distribution's entropy in the loss.
-        entropy_coeff (float): Coefficient of entropy for loss regularization term.
+        stop_metric (ppo.Metric): An enum value representing the metric we use
+            to decide early stopping. See ppo.Metric for more information about options.
+        stop_cutoff (float): A cutoff value for the stop_metric. If the stop_metric
+            exceeds this cutoff value, we stop the current epoch.
+        reg_metric (ppo.Metric): An enum value representing the metric we use for
+            regularizaiton. See ppo.Metric for more information about options.
+        reg_coeff (float): The coefficient of the regularization term in the loss.
         logger_kwargs (dict): Keyword args for EpochLogger.
         save_freq (int): How often (in terms of gap between epochs) to save
             the current policy and value function.
@@ -218,20 +289,15 @@ def ppo(env_fn,
                                        pi_lr=pi_lr,
                                        vf_lr=vf_lr,
                                        lam=lam,
-                                       target_kl=target_kl)
+                                       stop_metric=stop_metric,
+                                       stop_cutoff=stop_cutoff,
+                                       reg_metric=reg_metric,
+                                       reg_coeff=reg_coeff)
 
         wandb.init(config=hyperparameter_defaults,
                    project='ppo-hyperparameter-sweep',
                    entity='self-play-project')
         config = wandb.config
-        # sweep params
-        if args.sweep:
-            gamma = config.gamma
-            clip_ratio = config.clip_ratio
-            pi_lr = config.pi_lr
-            vf_lr = config.vf_lr
-            lam = config.lam
-            target_kl = config.target_kl
 
         wandb.run.name = "{}_".format(env_name) + wandb.run.name
 
@@ -246,10 +312,8 @@ def ppo(env_fn,
     np.random.seed(seed)
 
     # Create actor-critic module
-    print("about to build actor critic")
     ac = actor_critic(env.observation_space,
                       env.action_space,
-                      hidden_sizes=hidden_sizes,
                       **ac_kwargs)
 
     # Sync params across processes
@@ -274,15 +338,20 @@ def ppo(env_fn,
         loss_pi = -(torch.min(ratio * adv, clip_adv)).mean()
 
         # Useful extra info
-        approx_kl = (logp - logp_old).mean().item()
-        ent = pi.entropy().mean().item()
+        ref_mean, ref_std = torch.zeros(act.shape[-1]), torch.ones(act.shape[-1])
+        ref_logp = Normal(ref_mean, ref_std).log_prob(act).sum(axis=-1)
         clipped = ratio.gt(1+clip_ratio) | ratio.lt(1-clip_ratio)
         clipfrac = torch.as_tensor(clipped, dtype=torch.float32).mean().item()
-        pi_info = dict(kl=approx_kl, ent=ent, cf=clipfrac)
+        pi_info = dict(cf = clipfrac)
+        pi_info['entropy'] = pi.entropy().mean()
+        pi_info['kl'] = (logp - logp_old).mean()
+        pi_info['rev_kl'] = (torch.exp(logp_old / logp) * (logp_old - logp)).mean()
+        pi_info['ref_kl'] = (logp - ref_logp).mean()
         
-        # Add distribution entropy to loss
-        if entropy_reg:
-            loss_pi -= entropy_coeff * ent
+        # Regularize
+        if reg_metric:
+            sign = -1 if reg_metric == 'entropy' else 1
+            loss_pi += sign * reg_coeff * pi_info[reg_metric]
 
         return loss_pi, pi_info
 
@@ -312,8 +381,8 @@ def ppo(env_fn,
         for i in range(train_pi_iters):
             pi_optimizer.zero_grad()
             loss_pi, pi_info = compute_loss_pi(data)
-            kl = mpi_avg(pi_info['kl'])
-            if clip_kl and kl > 2 * target_kl:
+            c = -1 if stop_metric is 'entropy' else 1 # reverse comparison order for entropy
+            if stop_metric and c * mpi_avg(pi_info[stop_metric].detach()) > c * stop_cutoff:
                 logger.log('Early stopping at step %d due to reaching max kl.'%i)
                 break
             loss_pi.backward()
@@ -331,9 +400,11 @@ def ppo(env_fn,
             vf_optimizer.step()
 
         # Log changes from update
-        kl, ent, cf = pi_info['kl'], pi_info_old['ent'], pi_info['cf']
-        logger.store(LossPi=pi_l_old, LossV=v_l_old,
-                     KL=kl, Entropy=ent, ClipFrac=cf,
+        logger.store(LossPi=pi_l_old, LossV=v_l_old, ClipFrac=pi_info['cf'],
+                     KL=mpi_avg(pi_info['kl'].item()), 
+                     Entropy=mpi_avg(pi_info['entropy'].item()),
+                     Reverse_KL=mpi_avg(pi_info['rev_kl'].item()), 
+                     Reference_KL=mpi_avg(pi_info['ref_kl'].item()),
                      DeltaLossPi=(loss_pi.item() - pi_l_old),
                      DeltaLossV=(loss_v.item() - v_l_old))
 
@@ -420,73 +491,140 @@ def ppo(env_fn,
         logger.log_tabular('DeltaLossV', average_only=True)
         logger.log_tabular('Entropy', average_only=True)
         logger.log_tabular('KL', average_only=True)
+        logger.log_tabular('Reverse_KL', average_only=True)
+        logger.log_tabular('Reference_KL', average_only=True)
         logger.log_tabular('ClipFrac', average_only=True)
         logger.log_tabular('StopIter', average_only=True)
         logger.log_tabular('Time', time.time()-start_time)
         logger.dump_tabular()
 
-def parse_boolean(arg):
-    arg = str(arg).upper()
-    if 'TRUE'.startswith(arg):
-        return True
-    elif 'FALSE'.startswith(arg):
-        return False
-    else:
-        pass
 
-def parse_std_source(arg):
-    arg = str(arg).upper()
-    if 'NETWORK'.startswith(arg):
-        return True
-    if 'PARAMETER'.startswith(arg):
-        return False
-    if 'CONSTANT'.startswith(arg):
-        return None
-    else:
-        pass
 
 if __name__ == '__main__':
+    """
+    Runs PPO on an OpenAI Gym or DeepMind Control environment (the latter handled
+    through a dmc2gym wrapper).
+    Program args:
+        gym_env (str): Name of the OpenAI Gym environment to use (if use_dmc is False and
+            we are using a Gym environment). e.g. "Cartpole-v1"
+        dmc_env (str): Domain name and task name of the DeepMind Control environment to use,
+            separated by a space. (if use_dmc is True and we are using a DMC environment). 
+            e.g. "quadruped run"
+        use_dmc (bool): Whether or not to use the DeepMind Control environment. If False,
+            we use the supplied OpenAI Gym environment instead.
+        sweep (bool): Whether to record this run as a wandb sweep.
+        video (bool): Whether to save rendered videos of our agent at test time.
+
+        The following model hyperparameters and training hyperparameters have identical
+        definitions as defined in the docstring for ppo:
+        activation (nn.Module), pi_width (int), pi_depth (int), vf_width (int), 
+        vf_depth (int), pi_weight_ratio (float), pi_input_norm (bool), vf_input_norm (bool),
+        std_dim (int), std_source (bool), std_value (float), squash (bool), seed (int), 
+        steps_per_epoch (int), epochs (int), gamma (float), clip_ratio (float), pi_lr (float), 
+        vf_lr (float), train_pi_iters (int), train_v_iters (int), lam (float), max_ep_len (int)
+        
+        stop_metric (str): A string parsed into an enum value representing the metric we use
+            to decide early stopping. See ppo.Metric for more information about options.
+        min_entropy (float): If stop_metric is ppo.Metric.ENTROPY, we stop episodes when
+            entropy dips below this cutoff value.
+        max_kl (float): If stop_metric is ppo.Metric.KL_DIV, we stop episodes when KL
+            divergence (that is, D_KL(pi_old || pi)) exceeds this cutoff value.
+        max_rev_kl (float): If stop_metric is ppo.Metric.REVERSE_KL, we stop episodes when
+            reverse KL (that is, D_KL(pi || pi_old)) exceeds this cutoff value.
+        max_ref_kl (float): If stop_metric is ppo.Metric.REF_KL, we stop episodes when
+            the policy's KL against a reference N(0, 1) distribution exceeds this cutoff.
+        
+        reg_metric (str): A string parsed into an enum value representing the metric we use
+            to regularize the model. See ppo.Metric for more information about options.
+            The corresponding metric is multiplied by a coefficient and subtracted from the
+            loss (or added in the case of entropy).
+        entropy_coeff (float): If reg_metric is ppo.Metric.ENTROPY, we use this float as
+            the coefficient of the entropy bonus in our loss.
+        kl_coeff (float): If reg_metric is ppo.Metric.KL_DIV, we use this float as the 
+            coefficient of the KL penalty (D_KL(pi_old || pi)) in our loss.
+        rev_kl_coeff (float): If reg_metric is ppo.Metric.REV_KL, we use this float as the
+            coefficient of the reverse KL penalty (D_KL(pi || pi_old)) in our loss.
+        ref_kl_coeff (float): If reg_metric is ppo.Metric.REF_KL, we use this float as the
+            coefficient of the KL penalty (against a reference N(0, 1) distribution) in
+            our loss.
+    """
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument('--gym_env', type=str, default='CartPole-v1')
     parser.add_argument('--dmc_env', type=str, default='quadruped run')
     parser.add_argument('--use_dmc', type=parse_boolean, default=True)
+    
     parser.add_argument('--sweep', type=parse_boolean, default=True)
     parser.add_argument('--video', type=parse_boolean, default=True)
-    parser.add_argument('--hid', type=int, default=(64, 32), nargs="+")
+    
+    # Network architecture params
+    parser.add_argument('--activation', type=parse_activation, default=nn.Tanh)
+    parser.add_argument('--pi_width', type=int, default=64)
+    parser.add_argument('--pi_depth', type=int, default=2)
+    parser.add_argument('--vf_width', type=int, default=64)
+    parser.add_argument('--vf_depth', type=int, default=2)
+    parser.add_argument('--pi_weight_ratio', type=float, default=0.01)
+    parser.add_argument('--pi_input_norm', type=parse_boolean, default=False)
+    parser.add_argument('--vf_input_norm', type=parse_boolean, default=False)
 
+    # Training stochasticity params
+    parser.add_argument('--std_dim', type=int, default=1)
+    parser.add_argument('--std_value', type=float, default=0.5)
+    parser.add_argument('--std_source', type=parse_std_source, default=None)
+
+    # Training loop hyperparams
     parser.add_argument('--seed', '-s', type=int, default=0)
     parser.add_argument('--cpu', type=int, default=1)
     parser.add_argument('--steps', type=int, default=4000)
     parser.add_argument('--epochs', type=int, default=75)
     parser.add_argument('--exp_name', type=str, default='ppo')
 
-    # hyper params
+    # Model hyperparams
+    parser.add_argument('--squash', type=parse_boolean, default=True)
     parser.add_argument('--gamma', type=float, default=0.99)
     parser.add_argument('--clip_ratio', type=float, default=0.2)
     parser.add_argument('--pi_lr', type=float, default=.0003)
     parser.add_argument('--vf_lr', type=float, default=0.001)
     parser.add_argument('--lam', type=float, default=0.97)
-    parser.add_argument('--target_kl', type=float, default=0.01)
-    parser.add_argument('--clip_kl', type=parse_boolean, default=True)
-    parser.add_argument('--std_dim', type=int, default=1)
-    parser.add_argument('--std_value', type=float, default=0.5)
-    parser.add_argument('--std_source', type=parse_std_source, default=None)
-    parser.add_argument('--entropy_reg', type=parse_boolean, default=False)
+    parser.add_argument('--max_ep_len', type=int, default=1000)
+
+    # Epoch clipping using KL / Entropy as metric
+    parser.add_argument('--stop_metric', type=parse_metric, default=None)
+    parser.add_argument('--min_entropy', type=float, default=0.01)
+    parser.add_argument('--max_kl', type=float, default=0.01)
+    parser.add_argument('--max_rev_kl', type=float, default=0.01)
+    parser.add_argument('--max_ref_kl', type=float, default=0.01)
+
+    # Regularization with KL / Entropy bonuses
+    parser.add_argument('--reg_metric', type=parse_metric, default=None)
     parser.add_argument('--entropy_coeff', type=float, default=0.01)
-    parser.add_argument('--squash', type=parse_boolean, default=True)
+    parser.add_argument('--kl_coeff', type=float, default=0.01)
+    parser.add_argument('--rev_kl_coeff', type=float, default=0.01)
+    parser.add_argument('--ref_kl_coeff', type=float, default=0.01)
 
     args = parser.parse_args()
-    mpi_fork(args.cpu)  # run parallel code with mpi
-    ac_kwargs = default_ac_kwargs
+    ac_kwargs = dict()
+    ac_kwargs['activation'] = args.activation
+    ac_kwargs['pi_width'] = args.pi_width
+    ac_kwargs['pi_depth'] = args.pi_depth
+    ac_kwargs['vf_width'] = args.vf_width
+    ac_kwargs['vf_depth'] = args.vf_depth
+    ac_kwargs['pi_weight_ratio'] = args.pi_weight_ratio
+    ac_kwargs['pi_input_norm'] = args.pi_input_norm
+    ac_kwargs['vf_input_norm'] = args.vf_input_norm
     ac_kwargs['std_dim'] = args.std_dim
     ac_kwargs['std_source'] = args.std_source
     ac_kwargs['std_value'] = args.std_value
     ac_kwargs['squash'] = args.squash
-
+    
+    get_objective = lambda metric: "min_" if metric == "entropy" else "max_"
+    get_cutoff = lambda metric: getattr(args, get_objective(metric) + metric)
+    get_coeff = lambda metric: getattr(args, metric + "_coeff")
+    stop_cutoff = None if args.stop_metric is None else get_cutoff(args.stop_metric)
+    reg_coeff = None if args.reg_metric is None else get_coeff(args.reg_metric)
     from spinup.utils.run_utils import setup_logger_kwargs
     logger_kwargs = setup_logger_kwargs(args.exp_name, args.seed)
-
+    mpi_fork(args.cpu)  # run parallel code with mpi
 
     if args.use_dmc:
         dmc_identifiers = args.dmc_env.split()
@@ -494,17 +632,17 @@ if __name__ == '__main__':
                                   task_name=dmc_identifiers[1],
                                   seed=args.seed),
             actor_critic=core.MLPActorCritic,
-            hidden_sizes=args.hid,
             ac_kwargs=ac_kwargs,
             gamma=args.gamma,
             clip_ratio=args.clip_ratio,
             pi_lr=args.pi_lr,
             vf_lr=args.vf_lr,
             lam=args.lam,
-            target_kl=args.target_kl,
-            clip_kl=args.clip_kl,
-            entropy_reg=args.entropy_reg,
-            entropy_coeff=args.entropy_coeff,
+            max_ep_len=args.max_ep_len,
+            stop_metric=args.stop_metric,
+            stop_cutoff=stop_cutoff,
+            reg_metric=args.reg_metric,
+            reg_coeff=reg_coeff,
             seed=args.seed,
             steps_per_epoch=args.steps,
             epochs=args.epochs,
@@ -514,17 +652,17 @@ if __name__ == '__main__':
     else:
         ppo(lambda : gym.make(args.gym_env),
             actor_critic=core.MLPActorCritic,
-            hidden_sizes=args.hid,
             ac_kwargs=ac_kwargs,
             gamma=args.gamma,
             clip_ratio=args.clip_ratio,
             pi_lr=args.pi_lr,
             vf_lr=args.vf_lr,
             lam=args.lam,
-            target_kl=args.target_kl,
-            clip_kl=args.clip_kl,
-            entropy_reg=args.entropy_reg,
-            entropy_coeff=args.entropy_coeff,
+            max_ep_len=args.max_ep_len,
+            stop_metric=args.stop_metric,
+            stop_cutoff=stop_cutoff,
+            reg_metric=args.reg_metric,
+            reg_coeff=reg_coeff,
             seed=args.seed,
             steps_per_epoch=args.steps,
             epochs=args.epochs,

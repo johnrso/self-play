@@ -10,6 +10,60 @@ from torch.distributions.categorical import Categorical
 import torch.nn.functional as F
 
 
+class InputNormalizer(nn.Module):
+    """
+    Keeps track of the mean and (unbiased) standard deviation of all observations
+    seen so far, and normalizes inputs according to these statistics. Let
+        t be the sample size,
+        N be the number of inputs we have seen including this sample,
+        prev_mean be the mean of inputs we have previously seen,
+        samp_mean be the mean of sample inputs,
+        prev_std be the unbiased standard deviation of inputs we have previously seen, and
+        samp_std be the biased standard deviation of inputs we have previously seen.
+    Then the new mean is given by
+        ((N - t) * prev_mean + t * samp_mean) / N
+    and the new standard deviation can be derived as
+        (N - t - 1) / (N - 1) * prev_std^2 + t / (N - 1) * samp_std^2
+        + t (N - t) / (N (N - 1)) * (prev_mean - samp_mean)^2
+    
+    Edge cases:
+    
+    If N - t == 0, and we have seen no data so far, then neither prev_mean nor prev_std
+    exist, so we must instead set self.mean and self.std to the mean and std of the sample.
+    (The latter is only set if the batch size is > 1, since otherwise unbiased std is
+    undefined. We only normalize obs before returning if the batch size is > 1.)
+
+    If N - t == 1, we have a defined prev_mean but not a defined prev_std (because we store
+    the unbiased std), but in this case the coefficient on prev_std^2 becomes zero in the 
+    formula above, so we can simply leave out this term unless N - t > 1.
+    """
+    def __init__(self):
+        super().__init__()
+        self.mean = None
+        self.std = None
+        self.count = 0
+
+    def forward(self, obs):
+        t = 1 if len(obs.shape) < 2 else obs.shape[0]   # batch size
+        self.count = N = self.count + t                 # new size
+        prev_mean, samp_mean = self.mean, obs.mean(axis=0)
+        prev_std, samp_std = self.std, obs.std(axis=0, unbiased=False)
+        if N - t == 0:                                  # if we've never seen any data,
+            self.mean = obs.mean(axis=0)                # make mean and std those of sample
+            if N > 1:
+                self.std = torch.std(axis=0, unbiased=True)
+                return (obs - self.mean) / self.std
+            return obs
+        else:                                           # update rule when we've seen data
+            self.mean = ((N - t) * prev_mean + t * samp_mean) / N
+            self.std = t / (N - 1) * samp_std * samp_std
+            if N - t > 1:                               # only include prev_std if it exists
+                self.std += (N - t - 1) / (N - 1) * prev_std * prev_std
+            diff = (prev_mean - samp_mean) * (prev_mean - samp_mean)
+            self.std = torch.sqrt(self.std + t * (N - t) / (N * (N - 1)) * diff)
+        return (obs - self.mean) / self.std
+
+
 class Actor(nn.Module):
 
     def _distribution(self, obs):
@@ -36,8 +90,8 @@ def combined_shape(length, shape=None):
     return (length, shape) if np.isscalar(shape) else (length, *shape)
 
 
-def mlp(sizes, activation, output_activation=nn.Identity):
-    layers = []
+def mlp(sizes, activation, output_activation=nn.Identity, input_norm=False):
+    layers = [InputNormalizer()] if input_norm else []
     for j in range(len(sizes)-1):
         act = activation if j < len(sizes)-2 else output_activation
         layers += [nn.Linear(sizes[j], sizes[j+1]), act()]
@@ -101,14 +155,17 @@ class MLPGaussianActor(Actor):
                  std_dim=1,
                  std_source=None,
                  std_value=0.5,
-                 squash=True):
+                 squash=True,
+                 weight_ratio=0.01,
+                 input_norm=False):
         super().__init__()
         self.act_dim = act_dim
         self.squash = squash
 
         # Initialize Mean Network Architecture
-        self.base_net = mlp([obs_dim] + list(hidden_sizes), activation)
+        self.base_net = mlp([obs_dim] + list(hidden_sizes), activation, input_norm=input_norm)
         self.mu_layer = nn.Linear(hidden_sizes[-1], act_dim)
+        self.mu_layer.weight = nn.Parameter(weight_ratio * self.mu_layer.weight)
         if not squash:
             self.mu_layer = nn.Sequential(self.mu_layer, nn.Tanh())
    
@@ -117,7 +174,7 @@ class MLPGaussianActor(Actor):
         if std_source is None:
             self.log_std = torch.tensor(np.log(std_value))
         elif not std_source:
-            self.log_std = nn.Parameter(torch.squeeze(np.log(std_value)*torch.ones(pow(act_dim, std_dim))))
+            self.log_std = nn.Parameter(np.log(std_value)*torch.ones(pow(act_dim, std_dim)))
         else:
             self.log_layer = nn.Linear(hidden_sizes[-1], pow(act_dim, std_dim))
         self.std_dim = std_dim
@@ -140,9 +197,10 @@ class MLPGaussianActor(Actor):
 
 class MLPCritic(nn.Module):
 
-    def __init__(self, obs_dim, hidden_sizes, activation):
+    def __init__(self, obs_dim, hidden_sizes, activation, input_norm=False):
         super().__init__()
-        self.v_net = mlp([obs_dim] + list(hidden_sizes) + [1], activation)
+        sizes = [obs_dim] + list(hidden_sizes) + [1]
+        self.v_net = mlp(sizes, activation, input_norm=input_norm)
 
     def forward(self, obs):
         return torch.squeeze(self.v_net(obs), -1) # Critical to ensure v has right shape.
@@ -154,45 +212,62 @@ class MLPActorCritic(nn.Module):
     def __init__(self,
                  observation_space,
                  action_space,
-                 hidden_sizes=(64,64),
+                 pi_width=64,
+                 pi_depth=2,
+                 vf_width=64,
+                 vf_depth=2,
                  activation=nn.Tanh,
                  std_dim=1,
                  std_source=False,
                  std_value=0.5,
-                 squash=False):
+                 squash=False,
+                 pi_weight_ratio=0.01,
+                 pi_input_norm=False,
+                 vf_input_norm=False):
         super().__init__()
 
         obs_dim = observation_space.shape[0]
-
-        # Gather action space limits, create lob prob correction funcs, use Gaussian Actor
-        # if action space is Box
+        
+        # Use a GaussianActor for continuous domains and a CategoricalActor for discrete
+        # domains, only squashing if squash is True and domain is continuous
         if isinstance(action_space, Box):
             self.is_discrete = False
             err_str = "multidimensional action space shape not supported by MLPGaussianActor"
             assert len(action_space.shape) == 1, err_str
 
-            self.squash = squash
-
             # Get bounded parameter and validate action space bounds
             self.bounded = validate_bounds(action_space)
+            
+            if squash:
+                self.squash = lambda a: torch.tanh(a)
+            elif self.bounded:
+                self.squash = lambda a: torch.clamp(a, -1, 1)
+            else:
+                self.squash = lambda a: a
             
             # Build Policy (pass in corrections to log probs as lambdas taking action)
             self.pi = MLPGaussianActor(obs_dim,
                                        action_space.shape[0],
-                                       hidden_sizes,
+                                       [pi_width] * pi_depth,
                                        activation,
                                        std_dim=std_dim,
                                        std_value=std_value,
                                        std_source=std_source,
-                                       squash=squash)
+                                       squash=squash,
+                                       weight_ratio=pi_weight_ratio,
+                                       input_norm=pi_input_norm)
 
         # Use Categorical Actor if action space is Discrete
         elif isinstance(action_space, Discrete):
-            self.is_discrete = True
-            self.pi = MLPCategoricalActor(obs_dim, action_space.n, hidden_sizes, activation)
+            self.squash = lambda a: a
+            self.pi = MLPCategoricalActor(obs_dim, 
+                                          action_space.n, 
+                                          [pi_width] * pi_depth, 
+                                          activation,
+                                          input_norm=vf_input_norm)
 
         # build value function
-        self.v  = MLPCritic(obs_dim, hidden_sizes, activation)
+        self.v  = MLPCritic(obs_dim, [vf_width] * vf_depth, activation)
 
     def step(self, obs, deterministic=False):
         with torch.no_grad():
@@ -205,10 +280,7 @@ class MLPActorCritic(nn.Module):
             else:
                 a = pi.sample()
             logp_a = self.pi._log_prob_from_distribution(pi, a)
-            if not self.is_discrete and self.squash:
-                a = torch.tanh(a)
-            elif not self.is_discrete and self.bounded:
-                a = torch.clamp(a, -1, 1)
+            a = self.squash(a)
             v = self.v(obs)
         return np.array(a), v.numpy(), logp_a.numpy()
 
