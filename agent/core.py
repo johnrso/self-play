@@ -51,9 +51,9 @@ class InputNormalizer(nn.Module):
         prev_mean, samp_mean = self.mean, obs.mean(axis=0)
         prev_std, samp_std = self.std, obs.std(axis=0, unbiased=False)
         if N - t == 0:                                  # if we've never seen any data,
-            self.mean = obs.mean(axis=0)                # make mean and std those of sample
-            if N > 1:
-                self.std = torch.std(axis=0, unbiased=True)
+            self.mean = obs.mean(axis=0)                # make mean and std those of sample,
+            if N > 1:                                   # only using samp_std if it exists
+                self.std = obs.std(axis=0, unbiased=True)
                 return (obs - self.mean) / self.std
             return obs
         else:                                           # update rule when we've seen data
