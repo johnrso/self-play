@@ -1,0 +1,106 @@
+project: ppo-hyperparameter-sweep
+entity: self-play-project
+program: ppo.py
+command:
+  - ${env}
+  - xvfb-run
+  - "-s"
+  - "-screen 0 1280x1024x24"
+  - ${env}
+  - python3
+  - ${program}
+  - "--cpu"
+  - 4
+  - "--video"
+  - "True"
+  - "--epochs"
+  - 150
+  - ${args}
+method: bayes
+metric:
+  name: eval_returns
+  goal: maximize
+parameters:
+  gym_env:
+    values: ["LunarLanderContinuous-v2",
+             "CartPole-v1",
+             "MountainCar-v0",
+             "MountainCarContinuous-v0",
+             "Hopper-v2",
+             "BipedalWalker-v3",
+             "Walker2d-v2",
+             "Ant-v3"]
+  dmc_env: 
+    values: ["quadruped run",
+             "cheetah run",
+             "swimmer swimmer6",
+             "fish swim"]
+  use_dmc:
+    values: ["True", "False"]
+  
+  activation:
+    values: ["tanh", "relu"]
+  pi_width: 
+    values: [32, 64, 128, 256, 512]
+  pi_depth: 
+    values: [1, 2, 4, 8]
+  vf_width: 
+    values: [32, 64, 128]
+  vf_depth: 
+    values: [1, 2, 4, 8]
+  pi_weight_ratio:
+    values: [1, 0.01, 0]
+  pi_input_norm:
+    values: [True, False]
+  vf_input_norm:
+    values: [True, False]
+  
+  std_dim:
+    values: [0, 1]
+  std_value:
+    min: 0.1
+    max: 1
+  std_source:
+    values: ["Network", "Parameter", "Constant"]
+
+  squash:
+    values: [True, False]
+  gamma:
+    min: 0.99
+    max: 0.999
+  clip_ratio:
+    min: .15
+    max: .25
+  pi_lr:
+    min: 0.0001
+    max: 0.0005
+  vf_lr:
+    min: 0.0001
+    max: 0.002
+  lam:
+    min: .96
+    max: .99
+  
+  stop_metric:
+    values: ["None", "Entropy", "KL", "Reverse KL", "Reference KL"]
+  min_entropy:
+    values: [0, 0.01, 0.1]
+  max_kl:
+    values: [0.01, 0.02, 0.05, 0.5, 3]
+  max_rev_kl:
+    values: [0.01, 0.02, 0.05, 0.5, 3]
+  max_ref_kl:
+    values: [0.5, 1, 3, 10]
+  
+  reg_metric:
+    values: ["None", "Entropy", "KL", "Reverse KL", "Reference KL"]
+  entropy_coeff: 
+    values: [0, 0.01, 0.2]
+  kl_coeff:
+    values: [0, 0.01, 0.2]
+  rev_kl_coeff:
+    values: [0, 0.01, 0.2]
+  ref_kl_coeff:
+    values: [0, 0.0001, 0.01]
+
+
