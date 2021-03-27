@@ -3,12 +3,14 @@ entity: self-play-project
 program: ppo.py
 command:
   - ${env}
-  - python
+  - python3
   - ${program}
   - "--cpu"
   - 4
   - "--video"
   - "True"
+  - "--epochs"
+  - 150
   - ${args}
 method: bayes
 metric:
@@ -57,8 +59,6 @@ parameters:
   std_source:
     values: ["Network", "Parameter", "Constant"]
 
-  epochs:
-    values: [75, 200, 400]
   squash:
     values: [True, False]
   gamma:
@@ -78,7 +78,7 @@ parameters:
     max: .99
   
   stop_metric:
-    values: ["Entropy", "KL", "Reverse KL", "Reference KL"]
+    values: ["None", "Entropy", "KL", "Reverse KL", "Reference KL"]
   min_entropy:
     values: [0, 0.01, 0.1]
   max_kl:
@@ -89,7 +89,7 @@ parameters:
     values: [0.5, 1, 3, 10]
   
   reg_metric:
-    values: ["Entropy", "KL", "Reverse KL", "Reference KL"]
+    values: ["None", "Entropy", "KL", "Reverse KL", "Reference KL"]
   entropy_coeff: 
     values: [0, 0.01, 0.2]
   kl_coeff:
