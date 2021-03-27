@@ -44,7 +44,9 @@ class InputNormalizer(nn.Module):
         self.count = 0
 
     def forward(self, obs):
-        t = 1 if len(obs.shape) < 2 else obs.shape[0]   # batch size
+        if len(obs.shape) < 2:
+            obs = torch.unsqueeze(obs, 0)
+        t = obs.shape[0]                                # batch size
         self.count = N = self.count + t                 # new size
         prev_mean, samp_mean = self.mean, obs.mean(axis=0)
         prev_std, samp_std = self.std, obs.std(axis=0, unbiased=False)
