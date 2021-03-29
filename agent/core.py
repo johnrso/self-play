@@ -103,17 +103,24 @@ def mlp(sizes, activation, output_activation=nn.Identity, input_norm=False):
 def count_vars(module):
     return sum([np.prod(p.shape) for p in module.parameters()])
 
-def validate_bounds(action_space):
+def get_action_bound(action_space):
+    """
+    Gets the bound for closed action spaces, returns None for open action spaces.
+    Assumption: if action_space is a closed domain, it is [-a, a]^n for some a
+    Assumption: if action_space is an open domain, it is [-inf, inf]^n (no closed dims)
+    Assumption: action_space is a continuous Box domain
+    """
     bounded = (action_space.low[0] != float('-inf'))
     if bounded:
-        err_str = "closed action spaces must be [-1, 1]^n"
-        assert all([low == -1 for low in action_space.low]), err_str
-        assert all([high == 1 for high in action_space.high]), err_str
+        err_str = "closed action spaces must be [-a, a]^n"
+        assert all([low == action_space.low[0] for low in action_space.low]), err_str
+        assert all([high == action_space.low[0] for high in action_space.high]), err_str
+        return action_space.low[0]
     else:
         err_str = "open action spaces must be open on all dimensions"
         assert all([low == float('-inf') for low in action_space.low]), err_str
         assert all([high == float('inf') for high in action_space.high]), err_str
-    return bounded
+        return None
 
 
 def discount_cumsum(x, discount):
@@ -149,6 +156,45 @@ LOG_STD_MAX = 2
 LOG_STD_MIN = -20
 
 class MLPGaussianActor(Actor):
+    """
+    An actor for continuous action spaces.
+    Args:
+        obs_dim: Number of dimensions of observation space
+        act_dim: Number of dimensions of action space
+        hidden_sizes: List of hidden sizes for policy net
+        activation: Nonlinearity to use in policy net
+        std_dim: The dimension of the standard deviation variable that is stored.
+            0 -> meaning same standard deviation on all action space dimensions
+            1 -> meaning potentially differing standard deviation on action space dimensions
+        std_source: Represents the source of the standard deviation.
+            True  -> Predict standard deviation from base network
+            False -> Store standard deviation as learned parameter
+            None  -> Keep constant standard deviation
+        std_value: The constant value to use for the standard deviation if std_source is None
+        squash: Whether to squash action outputs by applying tanh. Used in logprob correction.
+            Only active if action space is bounded, regardless of value passed in.
+        squash_mean: Whether to squash mean action predicted by network by applying tanh.
+            Only active if squash is inactive and action space is bounded, regardless of 
+            value passed in.
+        weight_ratio: Ratio with which to initialize final layer weights. Set low.
+        input_norm: Whether to normalize inputs to the policy network (specifically, normalize
+            them relative to previous inputs/observations).
+        bound: The bound extracted from the action space. None if action space is unbounded.
+    """
+    class BoundMultiplier(nn.Module):
+        """
+        Tiny module used when we have a bounded space but are not squashing. In this case
+        we add a Tanh layer to the end of the network that predicts the action distribution
+        mean, which maps onto [-1, 1]^n, so we must multiply by a bound a to map to the correct
+        action space [-a, a]^n.
+        """
+        def __init__(self, bound=1):
+            super().__init__()
+            self.bound = bound
+        
+        def forward(self, act):
+            return self.bound * act
+            
 
     def __init__(self,
                  obs_dim,
@@ -159,32 +205,39 @@ class MLPGaussianActor(Actor):
                  std_source=None,
                  std_value=0.5,
                  squash=True,
+                 squash_mean=False,
                  weight_ratio=0.01,
-                 input_norm=False):
+                 input_norm=False,
+                 bound=None):
         super().__init__()
+
+        # Initialize parameters describing mapping to action space
         self.act_dim = act_dim
-        self.squash = squash
+        self.squash = squash and bound is not None
+        self.squash_mean = squash_mean and not squash and bound is not None
+        self.bound = bound
 
         # Initialize Mean Network Architecture
         self.base_net = mlp([obs_dim] + list(hidden_sizes), activation, input_norm=input_norm)
         self.mu_layer = nn.Linear(hidden_sizes[-1], act_dim)
         self.mu_layer.weight = nn.Parameter(weight_ratio * self.mu_layer.weight)
-        if not squash:
-            self.mu_layer = nn.Sequential(self.mu_layer, nn.Tanh())
+        if self.squash_mean:
+            self.mu_layer = nn.Sequential(self.mu_layer, nn.Tanh(), BoundMultiplier(bound))
    
         # Initialize Variance Parameters / Network Architecture
         assert std_dim in [0, 1]
-        if std_source is None:
+        if std_source is None:                       # std_source == None indicates constant
             self.log_std = torch.tensor(np.log(std_value))
-        elif not std_source:
+        elif not std_source:                         # std_source == False indicates parameter
             self.log_std = nn.Parameter(np.log(std_value)*torch.ones(pow(act_dim, std_dim)))
-        else:
+        else:                                        # std_source == True indicates network
             self.log_layer = nn.Linear(hidden_sizes[-1], pow(act_dim, std_dim))
         self.std_dim = std_dim
         self.std_source = std_source
 
     def _distribution(self, obs):
         mu = self.mu_layer(self.base_net(obs))
+        # use self.log_std if std_source is constant or parameter, use log_layer if network
         log_std = self.log_std if not self.std_source else self.log_layer(self.base_net(obs)) 
         std = torch.exp(torch.clamp(log_std, LOG_STD_MIN, LOG_STD_MAX))
         return Normal(mu, std)
@@ -193,8 +246,8 @@ class MLPGaussianActor(Actor):
         # Last axis sum needed for Torch Distribution
         logp_pi = pi.log_prob(act).sum(axis=-1)
         # Make adjustment to log prob if squashing
-        if self.squash:
-            logp_pi += (2 * (act + F.softplus(-2 * act) - np.log(2))).sum(axis=-1)
+        if self.squash and self.bound is not None:
+            logp_pi += (2 * (act + F.softplus(-2 * act)) - np.log(4 * self.bound)).sum(axis=-1)
         return logp_pi
 
 
@@ -211,6 +264,34 @@ class MLPCritic(nn.Module):
 
 class MLPActorCritic(nn.Module):
 
+    """
+    The full learning agent.
+    Args:
+        observation_space: The OpenAI Gym space for observations
+        action_space: The OpenAI Gym space for actions
+        pi_width: The width of the policy net
+        pi_depth: The depth of the policy net
+        vf_width: The width of the value net
+        vf_depth: The depth of the value net
+        activation: Nonlinearity to use in policy net
+        std_dim: The dimension of the standard deviation variable that is stored.
+            0 -> meaning same standard deviation on all action space dimensions
+            1 -> meaning potentially differing standard deviation on action space dimensions
+        std_source: Represents the source of the standard deviation.
+            True  -> Predict standard deviation from base network
+            False -> Store standard deviation as learned parameter
+            None  -> Keep constant standard deviation
+        std_value: The constant value to use for the standard deviation if std_source is None
+        squash: Whether to squash action outputs by applying tanh. Used in logprob correction.
+            Only active if action space is bounded, regardless of value passed in.
+        squash_mean: Whether to squash mean action predicted by network by applying tanh.
+            Only active if squash is inactive and action space is bounded, regardless of 
+            value passed in.
+        pi_weight_ratio: Ratio with which to initialize policy net final layer weights
+        pi_input_norm: Whether to normalize inputs to the policy network (specifically,
+            normalize them relative to previous inputs/observations)
+        vf_input_norm: Whether to normalize inputs to the policy network
+    """
 
     def __init__(self,
                  observation_space,
@@ -224,6 +305,7 @@ class MLPActorCritic(nn.Module):
                  std_source=False,
                  std_value=0.5,
                  squash=False,
+                 squash_mean=False,
                  pi_weight_ratio=0.01,
                  pi_input_norm=False,
                  vf_input_norm=False):
@@ -238,13 +320,13 @@ class MLPActorCritic(nn.Module):
             err_str = "multidimensional action space shape not supported by MLPGaussianActor"
             assert len(action_space.shape) == 1, err_str
 
-            # Get bounded parameter and validate action space bounds
-            self.bounded = validate_bounds(action_space)
+            # Get bound on action space dimensions             
+            bound = get_action_bounds(action_space)
 
-            if squash:
-                self.squash = lambda a: torch.tanh(a)
-            elif self.bounded:
-                self.squash = lambda a: torch.clamp(a, -1, 1)
+            if squash and bound is not None:
+                self.squash = lambda a: bound * torch.tanh(a)
+            elif bound is not None:
+                self.squash = lambda a: torch.clamp(a, -bound, bound)
             else:
                 self.squash = lambda a: a
             
@@ -257,8 +339,10 @@ class MLPActorCritic(nn.Module):
                                        std_value=std_value,
                                        std_source=std_source,
                                        squash=squash,
+                                       squash_mean=squash_mean,
                                        weight_ratio=pi_weight_ratio,
-                                       input_norm=pi_input_norm)
+                                       input_norm=pi_input_norm
+                                       bound=bound)
 
         # Use Categorical Actor if action space is Discrete
         elif isinstance(action_space, Discrete):
@@ -284,6 +368,7 @@ class MLPActorCritic(nn.Module):
             else:
                 a = pi.sample()
             logp_a = self.pi._log_prob_from_distribution(pi, a)
+            # always squash since it is the identity if we don't want to squash
             a = self.squash(a)
             v = self.v(obs)
         return np.array(a), v.numpy(), logp_a.numpy()

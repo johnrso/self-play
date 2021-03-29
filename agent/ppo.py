@@ -11,6 +11,7 @@ from torch.distributions import Normal
 from utils.logx import EpochLogger
 from utils.mpi_pytorch import setup_pytorch_for_mpi, sync_params, mpi_avg_grads
 from utils.mpi_tools import mpi_fork, mpi_avg, proc_id, mpi_statistics_scalar, num_procs
+from utils import parse_boolean, parse_std_source, parse_activation, parse_metric, PPOBuffer
 import dmc2gym
 from dmc2gym.wrappers import DMCWrapper
 import os
@@ -19,132 +20,6 @@ from enum import Enum
 
 # tmp
 os.environ['DISABLE_MUJOCO_RENDERING'] = '1'
-
-def parse_boolean(arg):
-    arg = str(arg).upper()
-    if 'TRUE'.startswith(arg):
-        return True
-    elif 'FALSE'.startswith(arg):
-        return False
-    else:
-        pass
-
-def parse_std_source(arg):
-    arg = str(arg).upper()
-    if 'NETWORK'.startswith(arg):
-        return True
-    if 'PARAMETER'.startswith(arg):
-        return False
-    if 'CONSTANT'.startswith(arg):
-        return None
-    else:
-        pass
-
-def parse_activation(arg):
-    arg = str(arg).upper()
-    if 'TANH'.startswith(arg):
-        return nn.Tanh
-    if 'RELU'.startswith(arg):
-        return nn.ReLU
-    if 'SIGMOID'.startswith(arg):
-        return nn.Sigmoid
-    else:
-        pass
-
-def parse_metric(arg):
-    arg = str(arg).upper()
-    if 'NONE'.startswith(arg):
-        return None
-    if 'ENTROPY'.startswith(arg):
-        return 'entropy'
-    if 'KL_DIVERGENCE'.startswith(arg) or \
-       'KL DIVERGENCE'.startswith(arg):
-        return 'kl'
-    if 'REVERSE_KL_DIVERGENCE'.startswith(arg) or \
-       'REVERSE KL DIVERGENCE'.startswith(arg) or \
-       'REV_KL_DIVERGENCE'.startswith(arg) or \
-       'REV KL DIVERGENCE'.startswith(arg):
-        return 'rev_kl'
-    if 'REFERENCE_KL_DIVERGENCE'.startswith(arg) or \
-       'REFERENCE KL DIVERGENCE'.startswith(arg) or \
-       'REF_KL_DIVERGENCE'.startswith(arg) or \
-       'REF KL DIVERGENCE'.startswith(arg):
-        return 'ref_kl'
-    else:
-        pass
-
-class PPOBuffer:
-    """
-    A buffer for storing trajectories experienced by a PPO agent interacting
-    with the environment, and using Generalized Advantage Estimation (GAE-Lambda)
-    for calculating the advantages of state-action pairs.
-    """
-
-    def __init__(self, obs_dim, act_dim, size, gamma=0.99, lam=0.95):
-        self.obs_buf = np.zeros(core.combined_shape(size, obs_dim), dtype=np.float32)
-        self.act_buf = np.zeros(core.combined_shape(size, act_dim), dtype=np.float32)
-        self.adv_buf = np.zeros(size, dtype=np.float32)
-        self.rew_buf = np.zeros(size, dtype=np.float32)
-        self.ret_buf = np.zeros(size, dtype=np.float32)
-        self.val_buf = np.zeros(size, dtype=np.float32)
-        self.logp_buf = np.zeros(size, dtype=np.float32)
-        self.gamma, self.lam = gamma, lam
-        self.ptr, self.path_start_idx, self.max_size = 0, 0, size
-
-    def store(self, obs, act, rew, val, logp):
-        """
-        Append one timestep of agent-environment interaction to the buffer.
-        """
-        assert self.ptr < self.max_size     # buffer has to have room so you can store
-        self.obs_buf[self.ptr] = obs
-        self.act_buf[self.ptr] = act
-        self.rew_buf[self.ptr] = rew
-        self.val_buf[self.ptr] = val
-        self.logp_buf[self.ptr] = logp
-        self.ptr += 1
-
-    def finish_path(self, last_val=0):
-        """
-        Call this at the end of a trajectory, or when one gets cut off
-        by an epoch ending. This looks back in the buffer to where the
-        trajectory started, and uses rewards and value estimates from
-        the whole trajectory to compute advantage estimates with GAE-Lambda,
-        as well as compute the rewards-to-go for each state, to use as
-        the targets for the value function.
-        The "last_val" argument should be 0 if the trajectory ended
-        because the agent reached a terminal state (died), and otherwise
-        should be V(s_T), the value function estimated for the last state.
-        This allows us to bootstrap the reward-to-go calculation to account
-        for timesteps beyond the arbitrary episode horizon (or epoch cutoff).
-        """
-
-        path_slice = slice(self.path_start_idx, self.ptr)
-        rews = np.append(self.rew_buf[path_slice], last_val)
-        vals = np.append(self.val_buf[path_slice], last_val)
-
-        # the next two lines implement GAE-Lambda advantage calculation
-        deltas = rews[:-1] + self.gamma * vals[1:] - vals[:-1]
-        self.adv_buf[path_slice] = core.discount_cumsum(deltas, self.gamma * self.lam)
-
-        # the next line computes rewards-to-go, to be targets for the value function
-        self.ret_buf[path_slice] = core.discount_cumsum(rews, self.gamma)[:-1]
-
-        self.path_start_idx = self.ptr
-
-    def get(self):
-        """
-        Call this at the end of an epoch to get all of the data from
-        the buffer, with advantages appropriately normalized (shifted to have
-        mean zero and std one). Also, resets some pointers in the buffer.
-        """
-        assert self.ptr == self.max_size    # buffer has to be full before you can get
-        self.ptr, self.path_start_idx = 0, 0
-        # the next two lines implement the advantage normalization trick
-        adv_mean, adv_std = mpi_statistics_scalar(self.adv_buf)
-        self.adv_buf = (self.adv_buf - adv_mean) / adv_std
-        data = dict(obs=self.obs_buf, act=self.act_buf, ret=self.ret_buf,
-                    adv=self.adv_buf, logp=self.logp_buf)
-        return {k: torch.as_tensor(v, dtype=torch.float32) for k,v in data.items()}
 
 
 def ppo(env_fn,
@@ -229,6 +104,9 @@ def ppo(env_fn,
                 std_value (float): Standard deviation to use as constant if std_source is None.
                 squash (bool): Whether or not to squash actions drawn from distribution
                     with tanh. If false but action space is still bounded, actions are clipped.
+                squash_mean (bool): If clipping actions (because action space is bounded but
+                    squash is False), this determines whether to add tanh layer to mean network
+                    to squash the mean of the action distribution into the action space bounds.
                 pi_width (int): Width of policy network hidden layers.
                 pi_depth (int): Number of policy network hidden layers.
                 vf_width (int): Width of value network hidden layers.
@@ -519,9 +397,10 @@ if __name__ == '__main__':
         definitions as defined in the docstring for ppo:
         activation (nn.Module), pi_width (int), pi_depth (int), vf_width (int), 
         vf_depth (int), pi_weight_ratio (float), pi_input_norm (bool), vf_input_norm (bool),
-        std_dim (int), std_source (bool), std_value (float), squash (bool), seed (int), 
-        steps_per_epoch (int), epochs (int), gamma (float), clip_ratio (float), pi_lr (float), 
-        vf_lr (float), train_pi_iters (int), train_v_iters (int), lam (float), max_ep_len (int)
+        std_dim (int), std_source (bool), std_value (float), squash (bool), squash_mean (bool),
+        seed (int), steps_per_epoch (int), epochs (int), gamma (float), clip_ratio (float), 
+        pi_lr (float), vf_lr (float), train_pi_iters (int), train_v_iters (int), lam (float),
+        max_ep_len (int)
         
         stop_metric (str): A string parsed into an enum value representing the metric we use
             to decide early stopping. See ppo.Metric for more information about options.
@@ -581,6 +460,7 @@ if __name__ == '__main__':
 
     # Model hyperparams
     parser.add_argument('--squash', type=parse_boolean, default=True)
+    parser.add_argument('--squash_mean', type=parse_boolean, default=True)
     parser.add_argument('--gamma', type=float, default=0.99)
     parser.add_argument('--clip_ratio', type=float, default=0.2)
     parser.add_argument('--pi_lr', type=float, default=.0003)
