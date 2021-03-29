@@ -66,6 +66,8 @@ parameters:
 
   squash:
     values: [True, False]
+  squash_mean:
+    values: [True, False]
   gamma:
     min: 0.99
     max: 0.999
