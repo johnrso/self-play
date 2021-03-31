@@ -8,62 +8,8 @@ from torch.distributions.normal import Normal
 from torch.distributions.multivariate_normal import MultivariateNormal
 from torch.distributions.categorical import Categorical
 import torch.nn.functional as F
+from util import combined_shape, mlp, count_vars, get_action_bound, InputNormalizer
 
-
-class InputNormalizer(nn.Module):
-    """
-    Keeps track of the mean and (unbiased) standard deviation of all observations
-    seen so far, and normalizes inputs according to these statistics. Let
-        t be the sample size,
-        N be the number of inputs we have seen including this sample,
-        prev_mean be the mean of inputs we have previously seen,
-        samp_mean be the mean of sample inputs,
-        prev_std be the unbiased standard deviation of inputs we have previously seen, and
-        samp_std be the biased standard deviation of inputs we have previously seen.
-    Then the new mean is given by
-        ((N - t) * prev_mean + t * samp_mean) / N
-    and the new standard deviation can be derived as
-        (N - t - 1) / (N - 1) * prev_std^2 + t / (N - 1) * samp_std^2
-        + t (N - t) / (N (N - 1)) * (prev_mean - samp_mean)^2
-    
-    Edge cases:
-    
-    If N - t == 0, and we have seen no data so far, then neither prev_mean nor prev_std
-    exist, so we must instead set self.mean and self.std to the mean and std of the sample.
-    (The latter is only set if the batch size is > 1, since otherwise unbiased std is
-    undefined. We only normalize obs before returning if the batch size is > 1.)
-
-    If N - t == 1, we have a defined prev_mean but not a defined prev_std (because we store
-    the unbiased std), but in this case the coefficient on prev_std^2 becomes zero in the 
-    formula above, so we can simply leave out this term unless N - t > 1.
-    """
-    def __init__(self):
-        super().__init__()
-        self.mean = None
-        self.std = None
-        self.count = 0
-
-    def forward(self, obs):
-        if len(obs.shape) < 2:
-            obs = torch.unsqueeze(obs, 0)
-        t = obs.shape[0]                                # batch size
-        self.count = N = self.count + t                 # new size
-        prev_mean, samp_mean = self.mean, obs.mean(axis=0)
-        prev_std, samp_std = self.std, obs.std(axis=0, unbiased=False)
-        if N - t == 0:                                  # if we've never seen any data,
-            self.mean = obs.mean(axis=0)                # make mean and std those of sample,
-            if N > 1:                                   # only using samp_std if it exists
-                self.std = obs.std(axis=0, unbiased=True)
-                return (obs - self.mean) / self.std
-            return obs
-        else:                                           # update rule when we've seen data
-            self.mean = ((N - t) * prev_mean + t * samp_mean) / N
-            self.std = t / (N - 1) * samp_std * samp_std
-            if N - t > 1:                               # only include prev_std if it exists
-                self.std += (N - t - 1) / (N - 1) * prev_std * prev_std
-            diff = (prev_mean - samp_mean) * (prev_mean - samp_mean)
-            self.std = torch.sqrt(self.std + t * (N - t) / (N * (N - 1)) * diff)
-        return (obs - self.mean) / self.std
 
 
 class Actor(nn.Module):
@@ -86,58 +32,6 @@ class Actor(nn.Module):
 
 
 
-def combined_shape(length, shape=None):
-    if shape is None:
-        return (length,)
-    return (length, shape) if np.isscalar(shape) else (length, *shape)
-
-
-def mlp(sizes, activation, output_activation=nn.Identity, input_norm=False):
-    layers = [InputNormalizer()] if input_norm else []
-    for j in range(len(sizes)-1):
-        act = activation if j < len(sizes)-2 else output_activation
-        layers += [nn.Linear(sizes[j], sizes[j+1]), act()]
-    return nn.Sequential(*layers)
-
-
-def count_vars(module):
-    return sum([np.prod(p.shape) for p in module.parameters()])
-
-def get_action_bound(action_space):
-    """
-    Gets the bound for closed action spaces, returns None for open action spaces.
-    Assumption: if action_space is a closed domain, it is [-a, a]^n for some a
-    Assumption: if action_space is an open domain, it is [-inf, inf]^n (no closed dims)
-    Assumption: action_space is a continuous Box domain
-    """
-    bounded = (action_space.low[0] != float('-inf'))
-    if bounded:
-        err_str = "closed action spaces must be [-a, a]^n"
-        assert all([low == action_space.low[0] for low in action_space.low]), err_str
-        assert all([high == action_space.low[0] for high in action_space.high]), err_str
-        return action_space.low[0]
-    else:
-        err_str = "open action spaces must be open on all dimensions"
-        assert all([low == float('-inf') for low in action_space.low]), err_str
-        assert all([high == float('inf') for high in action_space.high]), err_str
-        return None
-
-
-def discount_cumsum(x, discount):
-    """
-    magic from rllab for computing discounted cumulative sums of vectors.
-    input:
-        vector x,
-        [x0,
-         x1,
-         x2]
-    output:
-        [x0 + discount * x1 + discount^2 * x2,
-         x1 + discount * x2,
-         x2]
-    """
-    return scipy.signal.lfilter([1], [1, float(-discount)], x[::-1], axis=0)[::-1]
-
 class MLPCategoricalActor(Actor):
 
     def __init__(self, obs_dim, act_dim, hidden_sizes, activation, input_norm=False):
@@ -152,8 +46,12 @@ class MLPCategoricalActor(Actor):
     def _log_prob_from_distribution(self, pi, act):
         return pi.log_prob(act)
 
+
+
 LOG_STD_MAX = 2
 LOG_STD_MIN = -20
+
+
 
 class MLPGaussianActor(Actor):
     """
@@ -251,6 +149,7 @@ class MLPGaussianActor(Actor):
         return logp_pi
 
 
+
 class MLPCritic(nn.Module):
 
     def __init__(self, obs_dim, hidden_sizes, activation, input_norm=False):
@@ -260,6 +159,7 @@ class MLPCritic(nn.Module):
 
     def forward(self, obs):
         return torch.squeeze(self.v_net(obs), -1) # Critical to ensure v has right shape.
+
 
 
 class MLPActorCritic(nn.Module):
@@ -321,7 +221,7 @@ class MLPActorCritic(nn.Module):
             assert len(action_space.shape) == 1, err_str
 
             # Get bound on action space dimensions             
-            bound = get_action_bounds(action_space)
+            bound = get_action_bound(action_space)
 
             if squash and bound is not None:
                 self.squash = lambda a: bound * torch.tanh(a)
@@ -341,7 +241,7 @@ class MLPActorCritic(nn.Module):
                                        squash=squash,
                                        squash_mean=squash_mean,
                                        weight_ratio=pi_weight_ratio,
-                                       input_norm=pi_input_norm
+                                       input_norm=pi_input_norm,
                                        bound=bound)
 
         # Use Categorical Actor if action space is Discrete

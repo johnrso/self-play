@@ -11,7 +11,7 @@ from torch.distributions import Normal
 from utils.logx import EpochLogger
 from utils.mpi_pytorch import setup_pytorch_for_mpi, sync_params, mpi_avg_grads
 from utils.mpi_tools import mpi_fork, mpi_avg, proc_id, mpi_statistics_scalar, num_procs
-from utils import parse_boolean, parse_std_source, parse_activation, parse_metric, PPOBuffer
+from util import parse_boolean, parse_std_source, parse_activation, parse_metric, PPOBuffer
 import dmc2gym
 from dmc2gym.wrappers import DMCWrapper
 import os
