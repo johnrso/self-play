@@ -153,7 +153,7 @@ def get_action_bound(action_space):
         err_str = "closed action spaces must be [-a, a]^n"
         assert all([low == action_space.low[0] for low in action_space.low]), err_str
         assert all([high == -action_space.low[0] for high in action_space.high]), err_str
-        return action_space.low[0]
+        return action_space.high[0]
     else:
         err_str = "open action spaces must be open on all dimensions"
         assert all([low == float('-inf') for low in action_space.low]), err_str
