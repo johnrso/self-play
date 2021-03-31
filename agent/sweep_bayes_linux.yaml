@@ -3,11 +3,6 @@ entity: self-play-project
 program: ppo.py
 command:
   - ${env}
-  - xvfb-run
-  - "-a"
-  - "-s"
-  - "\"-screen 0 1280x1024x24\";"
-  - ${env}
   - python3
   - ${program}
   - "--cpu"
