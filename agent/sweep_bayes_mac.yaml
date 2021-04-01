@@ -21,7 +21,7 @@ metric:
 parameters:
   gym_env:
     values: ["LunarLanderContinuous-v2",
-             "MountainCarContinuous-v0",
+             "CartPole-v0",
              "Ant-v3"]
   dmc_env: 
     values: ["quadruped run",
