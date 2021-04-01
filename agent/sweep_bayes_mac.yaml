@@ -11,6 +11,8 @@ command:
   - 2
   - "--video"
   - "True"
+  - "--epochs"
+  - 150
   - ${args}
 method: bayes
 metric:
@@ -58,8 +60,6 @@ parameters:
   std_source:
     values: ["Network", "Parameter", "Constant"]
 
-  epochs:
-    values: [75, 200, 400]
   squash:
     values: [True, False]
   squash_mean:
