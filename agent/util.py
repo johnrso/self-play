@@ -14,11 +14,13 @@ from utils.mpi_tools import mpi_fork, mpi_avg, proc_id, mpi_statistics_scalar, n
 ##################################################################
 
 def parse_boolean(arg):
+    arg = str(arg).upper()
     if 'TRUE'.startswith(arg):
         return True
     elif 'FALSE'.startswith(arg):
         return False
     else:
+        print("failed to parse boolean {}".format(arg))
         pass
 
 def parse_std_source(arg):
@@ -30,6 +32,7 @@ def parse_std_source(arg):
     if 'CONSTANT'.startswith(arg):
         return None
     else:
+        print("failed to parse std_source {}".format(arg))
         pass
 
 def parse_activation(arg):
@@ -41,6 +44,7 @@ def parse_activation(arg):
     if 'SIGMOID'.startswith(arg):
         return nn.Sigmoid
     else:
+        print("failed to parse activation {}".format(arg))
         pass
 
 def parse_metric(arg):
@@ -63,6 +67,7 @@ def parse_metric(arg):
        'REF KL DIVERGENCE'.startswith(arg):
         return 'ref_kl'
     else:
+        print("failed to parse metric {}".format(arg))
         pass
 
 

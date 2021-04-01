@@ -11,25 +11,24 @@ command:
   - "True"
   - "--epochs"
   - 150
+  - "--sweep"
+  - "True"
+  - "--env_list"
+  - "LunarLanderContinuous-v2"
+  - "Ant-v3"
+  - "quadruped run"
+  - "walker run"
+  - "cheetah run"
+  - "humanoid run"
+  - "walker walk"
+  - "walker stand"
+  - "hopper hop"
   - ${args}
 method: bayes
 metric:
   name: eval_returns
   goal: maximize
 parameters:
-  gym_env:
-    values: ["LunarLanderContinuous-v2",
-             "CartPole-v0",
-             "Ant-v3"]
-  dmc_env: 
-    values: ["quadruped run",
-             "cheetah run",
-             "humanoid run",
-             "walker run",
-             "hopper hop"]
-  use_dmc:
-    values: ["True", "False"]
-  
   activation:
     values: ["tanh", "relu"]
   pi_width: 

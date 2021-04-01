@@ -5,6 +5,7 @@ import gym
 from gym.spaces import Discrete, Box
 import time
 import core
+import random
 import torch.nn as nn
 from torch.distributions import Normal
 
@@ -44,8 +45,7 @@ def ppo(env_fn,
         reg_coeff=0.01,
         logger_kwargs=dict(),
         save_freq=25,
-        sweep=True,
-        video=False):
+        video=True):
     """
     Proximal Policy Optimization (by clipping),
     with early stopping based on one of several KL metrics or entropy
@@ -151,6 +151,7 @@ def ppo(env_fn,
         logger_kwargs (dict): Keyword args for EpochLogger.
         save_freq (int): How often (in terms of gap between epochs) to save
             the current policy and value function.
+        video (bool): Whether or not to record and save video of model evals.
     """
 
     # Special function to avoid certain slowdowns from PyTorch + MPI combo.
@@ -159,7 +160,7 @@ def ppo(env_fn,
     # Instantiate environment
     env = env_fn()
     eval_env = env_fn()
-    disable_view_window()
+    #disable_view_window()
     env_name = env.unwrapped.spec.id
     obs_dim = env.observation_space.shape
     act_dim = env.action_space.shape
@@ -330,32 +331,35 @@ def ppo(env_fn,
         # Save model & evaluate
         if (epoch % save_freq == 0) or (epoch == epochs-1):
             if proc_id()==0:
+                # log training returns
+                wandb.log({'train_returns': ep_ret}, step=epoch)
                 # eval rollout
                 o, eval_ep_ret, _ = eval_env.reset(), 0, 0
                 frames = []
                 print('Evaluating and generating video')
                 for i in range(max_ep_len):
                     a = ac.act(torch.as_tensor(o, dtype=torch.float32))
-                    next_o, r, d, _ = eval_env.step(a)
-                    o = next_o
+                    o, r, d, _ = eval_env.step(a)
                     eval_ep_ret += r
                     kwargs = dict()
                     if isinstance(eval_env, DMCWrapper):
-                        kwargs['width'] = 256
-                        kwargs['height'] = 256
+                        kwargs['width'] = 512
+                        kwargs['height'] = 512
                     img = eval_env.render(mode='rgb_array', **kwargs)
-                    if args.video:
+                    if video:
                         frames.append(img)
-
-                if args.video:
+                    if d:
+                        break
+                print(video)
+                if video:
                     print("logging video")
                     # log video frames
                     video = np.transpose(np.array(frames),(0,3,1,2))[::4,...]
                     wandb.log({"video": wandb.Video(video, fps=30, format="gif")},
                               step=epoch)
 
-                # log ep reward
-                wandb.log({'eval_returns':eval_ep_ret},step=epoch)
+                # log eval reward
+                wandb.log({'eval_returns':eval_ep_ret}, step=epoch)
 
         # Perform PPO update!
         update()
@@ -386,14 +390,17 @@ if __name__ == '__main__':
     Runs PPO on an OpenAI Gym or DeepMind Control environment (the latter handled
     through a dmc2gym wrapper).
     Program args:
-        gym_env (str): Name of the OpenAI Gym environment to use (if use_dmc is False and
-            we are using a Gym environment). e.g. "Cartpole-v1"
-        dmc_env (str): Domain name and task name of the DeepMind Control environment to use,
-            separated by a space. (if use_dmc is True and we are using a DMC environment). 
-            e.g. "quadruped run"
-        use_dmc (bool): Whether or not to use the DeepMind Control environment. If False,
-            we use the supplied OpenAI Gym environment instead.
-        sweep (bool): Whether to record this run as a wandb sweep.
+        env (str): Name of the OpenAI Gym environment to use, or the domain and task name of
+            the DeepMind Control environment to use separated by a space. e.g. "Cartpole-v1"
+            or "quadruped run". Only used if not sweeping, for otherwise bayes hyperparam
+            optimization will only select environments we perform well on.
+        env_list (str): Names of the OpenAI Gym environments and DeepMind Control environments
+            from which to select randomly when sweeping.
+        sweep (bool): Whether to treat this run as a wandb sweep. If True, environment is
+                      sampled randomly from lists `gym_env_list` and `dmc_env_list` in the
+                      wandb config. If False, we get environment from command line options.
+                      This is to avoid wandb bayes search from only choosing environments
+                      on which the agent succeeds.
         video (bool): Whether to save rendered videos of our agent at test time.
 
         The following model hyperparameters and training hyperparameters have identical
@@ -432,12 +439,13 @@ if __name__ == '__main__':
     """
     import argparse
     parser = argparse.ArgumentParser()
-    parser.add_argument('--gym_env', type=str, default='CartPole-v1')
-    parser.add_argument('--dmc_env', type=str, default='quadruped run')
-    parser.add_argument('--use_dmc', type=parse_boolean, default=True)
     
-    parser.add_argument('--sweep', type=parse_boolean, default=True)
+    # Run params
+    parser.add_argument('--env', type=str, default='CartPole-v1')
+    parser.add_argument('--env_list', type=str, default=None, nargs='+')
+    parser.add_argument('--sweep', type=parse_boolean, default=False)
     parser.add_argument('--video', type=parse_boolean, default=True)
+    parser.add_argument('--exp_name', type=str, default='ppo')
     
     # Network architecture params
     parser.add_argument('--activation', type=parse_activation, default=nn.Tanh)
@@ -459,7 +467,6 @@ if __name__ == '__main__':
     parser.add_argument('--cpu', type=int, default=1)
     parser.add_argument('--steps', type=int, default=4000)
     parser.add_argument('--epochs', type=int, default=75)
-    parser.add_argument('--exp_name', type=str, default='ppo')
 
     # Model hyperparams
     parser.add_argument('--squash', type=parse_boolean, default=True)
@@ -500,6 +507,14 @@ if __name__ == '__main__':
     ac_kwargs['std_value'] = args.std_value
     ac_kwargs['squash'] = args.squash
     
+    env_str = (random.choice(args.env_list) if args.sweep else args.env).split()
+    if len(env_str) == 2:
+        env_fn = lambda : dmc2gym.make(domain_name=env_str[0],
+                                       task_name=env_str[1],
+                                       seed=args.seed)
+    else:
+        env_fn = lambda : gym.make(env_str[0])
+
     get_objective = lambda metric: "min_" if metric == "entropy" else "max_"
     get_cutoff = lambda metric: getattr(args, get_objective(metric) + metric)
     get_coeff = lambda metric: getattr(args, metric + "_coeff")
@@ -509,47 +524,21 @@ if __name__ == '__main__':
     logger_kwargs = setup_logger_kwargs(args.exp_name, args.seed)
     mpi_fork(args.cpu)  # run parallel code with mpi
 
-    if args.use_dmc:
-        dmc_identifiers = args.dmc_env.split()
-        ppo(lambda : dmc2gym.make(domain_name=dmc_identifiers[0],
-                                  task_name=dmc_identifiers[1],
-                                  seed=args.seed),
-            actor_critic=core.MLPActorCritic,
-            ac_kwargs=ac_kwargs,
-            gamma=args.gamma,
-            clip_ratio=args.clip_ratio,
-            pi_lr=args.pi_lr,
-            vf_lr=args.vf_lr,
-            lam=args.lam,
-            max_ep_len=args.max_ep_len,
-            stop_metric=args.stop_metric,
-            stop_cutoff=stop_cutoff,
-            reg_metric=args.reg_metric,
-            reg_coeff=reg_coeff,
-            seed=args.seed,
-            steps_per_epoch=args.steps,
-            epochs=args.epochs,
-            logger_kwargs=logger_kwargs,
-            sweep=args.sweep,
-            video=args.video)
-    else:
-        ppo(lambda : gym.make(args.gym_env),
-            actor_critic=core.MLPActorCritic,
-            ac_kwargs=ac_kwargs,
-            gamma=args.gamma,
-            clip_ratio=args.clip_ratio,
-            pi_lr=args.pi_lr,
-            vf_lr=args.vf_lr,
-            lam=args.lam,
-            max_ep_len=args.max_ep_len,
-            stop_metric=args.stop_metric,
-            stop_cutoff=stop_cutoff,
-            reg_metric=args.reg_metric,
-            reg_coeff=reg_coeff,
-            seed=args.seed,
-            steps_per_epoch=args.steps,
-            epochs=args.epochs,
-            logger_kwargs=logger_kwargs,
-            sweep=args.sweep,
-            video=args.video)
-
+    ppo(env_fn=env_fn,
+        actor_critic=core.MLPActorCritic,
+        ac_kwargs=ac_kwargs,
+        gamma=args.gamma,
+        clip_ratio=args.clip_ratio,
+        pi_lr=args.pi_lr,
+        vf_lr=args.vf_lr,
+        lam=args.lam,
+        max_ep_len=args.max_ep_len,
+        stop_metric=args.stop_metric,
+        stop_cutoff=stop_cutoff,
+        reg_metric=args.reg_metric,
+        reg_coeff=reg_coeff,
+        seed=args.seed,
+        steps_per_epoch=args.steps,
+        epochs=args.epochs,
+        logger_kwargs=logger_kwargs,
+        video=args.video)
