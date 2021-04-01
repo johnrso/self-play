@@ -8,7 +8,7 @@ command:
   - python
   - ${program}
   - "--cpu"
-  - 4
+  - 2
   - "--video"
   - "True"
   - ${args}
@@ -19,20 +19,19 @@ metric:
 parameters:
   gym_env:
     values: ["LunarLanderContinuous-v2",
-             "CartPole-v1",
-             "MountainCar-v0",
              "MountainCarContinuous-v0",
-             "Hopper-v2",
-             "BipedalWalker-v3",
-             "Walker2d-v2",
              "Ant-v3"]
   dmc_env: 
     values: ["quadruped run",
              "cheetah run",
-             "swimmer swimmer6",
-             "fish swim"]
+             "walker stand",
+             "walker run",
+             "walker walk",
+             "cartpole balance",
+             "hopper hop",
+             "humanoid run"]
   use_dmc:
-    values: ["True", "False"]
+    values: ["True"]
   
   activation:
     values: ["tanh", "relu"]
@@ -82,7 +81,7 @@ parameters:
     max: .99
   
   stop_metric:
-    values: ["Entropy", "KL", "Reverse KL", "Reference KL"]
+    values: ["None", "None", "None", "Entropy", "KL", "Reference KL"]
   min_entropy:
     values: [0, 0.01, 0.1]
   max_kl:
@@ -93,7 +92,7 @@ parameters:
     values: [0.5, 1, 3, 10]
   
   reg_metric:
-    values: ["Entropy", "KL", "Reverse KL", "Reference KL"]
+    values: ["None", "None", "None", "Entropy", "KL", "Reference KL"]
   entropy_coeff: 
     values: [0, 0.01, 0.2]
   kl_coeff:
