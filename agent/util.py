@@ -262,3 +262,20 @@ class PPOBuffer:
         data = dict(obs=self.obs_buf, act=self.act_buf, ret=self.ret_buf,
                     adv=self.adv_buf, logp=self.logp_buf)
         return {k: torch.as_tensor(v, dtype=torch.float32) for k,v in data.items()}
+
+
+##################################################################
+#                                                                #
+#                          RENDERING TOOLS                       #  
+#                                                                #
+##################################################################
+
+def disable_view_window():
+    from gym.envs.classic_control import rendering
+    org_constructor = rendering.Viewer.__init__
+
+    def constructor(self, *args, **kwargs):
+        org_constructor(self, *args, **kwargs)
+        self.window.set_visible(visible=False)
+
+    rendering.Viewer.__init__ = constructor

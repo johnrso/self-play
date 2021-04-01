@@ -11,7 +11,8 @@ from torch.distributions import Normal
 from utils.logx import EpochLogger
 from utils.mpi_pytorch import setup_pytorch_for_mpi, sync_params, mpi_avg_grads
 from utils.mpi_tools import mpi_fork, mpi_avg, proc_id, mpi_statistics_scalar, num_procs
-from util import parse_boolean, parse_std_source, parse_activation, parse_metric, PPOBuffer
+from util import parse_boolean, parse_std_source, parse_activation, parse_metric, PPOBuffer,
+                 disable_view_window
 import dmc2gym
 from dmc2gym.wrappers import DMCWrapper
 import os
@@ -157,7 +158,7 @@ def ppo(env_fn,
     # Instantiate environment
     env = env_fn()
     eval_env = env_fn()
-    eval_env.disable_view_window()
+    disable_view_window()
     env_name = env.unwrapped.spec.id
     obs_dim = env.observation_space.shape
     act_dim = env.action_space.shape
