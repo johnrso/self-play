@@ -21,16 +21,13 @@ parameters:
     values: ["LunarLanderContinuous-v2",
              "CartPole-v1",
              "MountainCar-v0",
-             "MountainCarContinuous-v0",
-             "Hopper-v2",
-             "BipedalWalker-v3",
-             "Walker2d-v2",
-             "Ant-v3"]
+             "MountainCarContinuous-v0"]
   dmc_env: 
     values: ["quadruped run",
              "cheetah run",
-             "swimmer swimmer6",
-             "fish swim"]
+             "humanoid run",
+             "walker run",
+             "hopper hop"]
   use_dmc:
     values: ["True", "False"]
   
