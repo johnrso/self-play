@@ -187,6 +187,7 @@ def ppo(env_fn,
     # Set up logger and save configuration
     logger = EpochLogger(**logger_kwargs)
     #logger.save_config(locals())
+    logger.log("\nName of environment: {}\n".format(env_name))
 
     # Random seed
     seed += 10000 * proc_id()
@@ -287,8 +288,8 @@ def ppo(env_fn,
                      Entropy=mpi_avg(pi_info['entropy'].item()),
                      Reverse_KL=mpi_avg(pi_info['rev_kl'].item()), 
                      Reference_KL=mpi_avg(pi_info['ref_kl'].item()),
-                     DeltaLossPi=(loss_pi.item() - pi_l_old),
-                     DeltaLossV=(loss_v.item() - v_l_old))
+                     DeltaLossPi=mpi_avg(loss_pi.item() - pi_l_old),
+                     DeltaLossV=mpi_avg(loss_v.item() - v_l_old))
 
     # Prepare for interaction with environment
     start_time = time.time()
@@ -332,7 +333,9 @@ def ppo(env_fn,
         if (epoch % save_freq == 0) or (epoch == epochs-1):
             if proc_id()==0:
                 # log training returns
-                wandb.log({'train_returns': ep_ret}, step=epoch)
+                wandb.log({'train_returns': logger.get_stats('EpRet')[0]}, 
+                          step=epoch)
+
                 # eval rollout
                 o, eval_ep_ret, _ = eval_env.reset(), 0, 0
                 frames = []
@@ -350,12 +353,11 @@ def ppo(env_fn,
                         frames.append(img)
                     if d:
                         break
-                print(video)
                 if video:
                     print("logging video")
                     # log video frames
-                    video = np.transpose(np.array(frames),(0,3,1,2))[::4,...]
-                    wandb.log({"video": wandb.Video(video, fps=30, format="gif")},
+                    vid_frames = np.transpose(np.array(frames),(0,3,1,2))[::4,...]
+                    wandb.log({"video": wandb.Video(vid_frames, fps=30, format="gif")},
                               step=epoch)
 
                 # log eval reward
@@ -493,6 +495,8 @@ if __name__ == '__main__':
     parser.add_argument('--ref_kl_coeff', type=float, default=0.01)
 
     args = parser.parse_args()
+
+    # Setup actor-critic kwargs
     ac_kwargs = dict()
     ac_kwargs['activation'] = args.activation
     ac_kwargs['pi_width'] = args.pi_width
@@ -507,22 +511,29 @@ if __name__ == '__main__':
     ac_kwargs['std_value'] = args.std_value
     ac_kwargs['squash'] = args.squash
     
+    # Get name of environment
+    random.seed(args.seed)
     env_str = (random.choice(args.env_list) if args.sweep else args.env).split()
+
+    # Process early stop/regularization parameters
+    get_objective = lambda metric: "min_" if metric == "entropy" else "max_"
+    get_cutoff = lambda metric: getattr(args, get_objective(metric) + metric)
+    get_coeff = lambda metric: getattr(args, metric + "_coeff")
+    stop_cutoff = None if args.stop_metric is None else get_cutoff(args.stop_metric)
+    reg_coeff = None if args.reg_metric is None else get_coeff(args.reg_metric)
+    
+    # Setup logger
+    from spinup.utils.run_utils import setup_logger_kwargs
+    logger_kwargs = setup_logger_kwargs(args.exp_name, args.seed)
+    mpi_fork(args.cpu)  # run parallel code with mpi
+    
+    # Instantiate environment
     if len(env_str) == 2:
         env_fn = lambda : dmc2gym.make(domain_name=env_str[0],
                                        task_name=env_str[1],
                                        seed=args.seed)
     else:
         env_fn = lambda : gym.make(env_str[0])
-
-    get_objective = lambda metric: "min_" if metric == "entropy" else "max_"
-    get_cutoff = lambda metric: getattr(args, get_objective(metric) + metric)
-    get_coeff = lambda metric: getattr(args, metric + "_coeff")
-    stop_cutoff = None if args.stop_metric is None else get_cutoff(args.stop_metric)
-    reg_coeff = None if args.reg_metric is None else get_coeff(args.reg_metric)
-    from spinup.utils.run_utils import setup_logger_kwargs
-    logger_kwargs = setup_logger_kwargs(args.exp_name, args.seed)
-    mpi_fork(args.cpu)  # run parallel code with mpi
 
     ppo(env_fn=env_fn,
         actor_critic=core.MLPActorCritic,

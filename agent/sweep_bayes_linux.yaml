@@ -54,6 +54,10 @@ parameters:
   std_source:
     values: ["Network", "Parameter", "Constant"]
 
+  seed:
+    min: 0
+    max: 1000000
+    distribution: int_uniform
   squash:
     values: [True, False]
   squash_mean:
