@@ -34,6 +34,7 @@ def ppo(env_fn,
         gamma=0.99,
         clip_ratio=0.2,
         pi_lr=3e-4,
+        pi_decay=0.97,
         vf_lr=1e-3,
         train_pi_iters=80,
         train_v_iters=80,
@@ -187,7 +188,7 @@ def ppo(env_fn,
     # Set up logger and save configuration
     logger = EpochLogger(**logger_kwargs)
     #logger.save_config(locals())
-    logger.log("\nName of environment: {}\n".format(env_name))
+    logger.log("\nName of environment: {}".format(env_name))
 
     # Random seed
     seed += 10000 * proc_id()
@@ -246,8 +247,6 @@ def ppo(env_fn,
     # Set up optimizers for policy and value function
     pi_optimizer = Adam(ac.pi.parameters(), lr=pi_lr)
     vf_optimizer = Adam(ac.v.parameters(), lr=vf_lr)
-
-    pi_decay = .97
     pi_scheduler = lr_scheduler.ExponentialLR(optimizer=pi_optimizer, gamma=pi_decay)
 
     # Set up model saving
@@ -284,12 +283,12 @@ def ppo(env_fn,
 
         # Log changes from update
         logger.store(LossPi=pi_l_old, LossV=v_l_old, ClipFrac=pi_info['cf'],
-                     KL=mpi_avg(pi_info['kl'].item()), 
-                     Entropy=mpi_avg(pi_info['entropy'].item()),
-                     Reverse_KL=mpi_avg(pi_info['rev_kl'].item()), 
-                     Reference_KL=mpi_avg(pi_info['ref_kl'].item()),
-                     DeltaLossPi=mpi_avg(loss_pi.item() - pi_l_old),
-                     DeltaLossV=mpi_avg(loss_v.item() - v_l_old))
+                     KL=pi_info['kl'].item(), 
+                     Entropy=pi_info['entropy'].item(),
+                     Reverse_KL=pi_info['rev_kl'].item(), 
+                     Reference_KL=pi_info['ref_kl'].item(),
+                     DeltaLossPi=(loss_pi.item() - pi_l_old),
+                     DeltaLossV=(loss_v.item() - v_l_old))
 
     # Prepare for interaction with environment
     start_time = time.time()
@@ -315,7 +314,7 @@ def ppo(env_fn,
             epoch_ended = t==local_steps_per_epoch-1
 
             if terminal or epoch_ended:
-                if epoch_ended and not(terminal):
+                if epoch_ended and not terminal:
                     print('Warning: trajectory cut off by epoch at %d steps.'%ep_len,
                           flush=True)
                 # if trajectory didn't reach terminal state, bootstrap value target
@@ -333,8 +332,8 @@ def ppo(env_fn,
         if (epoch % save_freq == 0) or (epoch == epochs-1):
             if proc_id()==0:
                 # log training returns
-                wandb.log({'train_returns': logger.get_stats('EpRet')[0]}, 
-                          step=epoch)
+                #wandb.log({'train_returns': logger.get_stats('EpRet')[0]}, 
+                #          step=epoch)
 
                 # eval rollout
                 o, eval_ep_ret, _ = eval_env.reset(), 0, 0
@@ -476,6 +475,7 @@ if __name__ == '__main__':
     parser.add_argument('--gamma', type=float, default=0.99)
     parser.add_argument('--clip_ratio', type=float, default=0.2)
     parser.add_argument('--pi_lr', type=float, default=.0003)
+    parser.add_argument('--pi_decay', type=float, default=1.0)
     parser.add_argument('--vf_lr', type=float, default=0.001)
     parser.add_argument('--lam', type=float, default=0.97)
     parser.add_argument('--max_ep_len', type=int, default=1000)
@@ -541,6 +541,7 @@ if __name__ == '__main__':
         gamma=args.gamma,
         clip_ratio=args.clip_ratio,
         pi_lr=args.pi_lr,
+        pi_decay=args.pi_decay,
         vf_lr=args.vf_lr,
         lam=args.lam,
         max_ep_len=args.max_ep_len,

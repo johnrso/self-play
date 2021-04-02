@@ -104,11 +104,12 @@ class InputNormalizer(nn.Module):
     the unbiased std), but in this case the coefficient on prev_std^2 becomes zero in the 
     formula above, so we can simply leave out this term unless N - t > 1.
     """
-    def __init__(self):
+    def __init__(self, eps=1e-20):
         super().__init__()
         self.mean = None
         self.std = None
         self.count = 0
+        self.eps = eps  # smoothing and dealing with std = 0
 
     def forward(self, obs):
         if len(obs.shape) < 2:
@@ -121,8 +122,8 @@ class InputNormalizer(nn.Module):
             self.mean = obs.mean(axis=0)                # make mean and std those of sample,
             if N > 1:                                   # only using samp_std if it exists
                 self.std = obs.std(axis=0, unbiased=True)
-                return (obs - self.mean) / self.std
-            return obs
+            else: 
+                return obs
         else:                                           # update rule when we've seen data
             self.mean = ((N - t) * prev_mean + t * samp_mean) / N
             self.std = t / (N - 1) * samp_std * samp_std
@@ -130,7 +131,7 @@ class InputNormalizer(nn.Module):
                 self.std += (N - t - 1) / (N - 1) * prev_std * prev_std
             diff = (prev_mean - samp_mean) * (prev_mean - samp_mean)
             self.std = torch.sqrt(self.std + t * (N - t) / (N * (N - 1)) * diff)
-        return (obs - self.mean) / self.std
+        return (obs - self.mean) / (self.std + self.eps)
 
 def mlp(sizes, activation, output_activation=nn.Identity, input_norm=False):
     layers = [InputNormalizer()] if input_norm else []

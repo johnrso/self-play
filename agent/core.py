@@ -271,7 +271,11 @@ class MLPActorCritic(nn.Module):
             # always squash since it is the identity if we don't want to squash
             a = self.squash(a)
             v = self.v(obs)
-        return np.array(a), v.numpy(), logp_a.numpy()
+            # critical to ensure a has the right dimensions
+            a = torch.squeeze(a)
+            if not a.shape:
+                a = torch.unsqueeze(a, axis=0)
+        return a.numpy(), v.numpy(), logp_a.numpy()
 
     def act(self, obs):
         return self.step(obs, deterministic=True)[0]

@@ -71,6 +71,9 @@ parameters:
   pi_lr:
     min: 0.0001
     max: 0.0005
+  pi_decay:
+    min: 0.9
+    max: 1.0
   vf_lr:
     min: 0.0001
     max: 0.002
