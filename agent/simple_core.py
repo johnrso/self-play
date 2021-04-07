@@ -95,12 +95,11 @@ class MLPGaussianActor(Actor):
     def _distribution(self, obs):
         batch_mean = self.mean_net(obs)
         scale_tril = torch.diag(torch.exp(self.logstd))
-        # batch_dim = batch_mean.shape[0]
-        # batch_scale_tril = scale_tril.repeat(batch_dim, 1, 1)
         action_distribution = MultivariateNormal(
             batch_mean,
             scale_tril=scale_tril,
         )
+
         return action_distribution
 
     def _log_prob_from_distribution(self, pi, act):
@@ -130,9 +129,6 @@ class MLPActorCritic(nn.Module):
         obs_dim = observation_space.shape[0]
         act_dim = action_space.shape[0]
 
-        self.action_low = action_low
-        self.action_high = action_high
-
         # Gather action space limits, create lob prob correction funcs, use Gaussian Actor
         # if action space is Box
         if isinstance(action_space, Box):
@@ -159,9 +155,6 @@ class MLPActorCritic(nn.Module):
 
             a = pi.sample()
             logp_a = self.pi._log_prob_from_distribution(pi, a)
-
-            if self.action_low is not None and self.action_high is not None:
-                a = np.maximum(np.minimum(a, self.action_high), self.action_low)
 
             v = self.v(obs)
 
