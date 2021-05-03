@@ -93,12 +93,55 @@ class MLPGaussianActor(Actor):
         self.mean_net = mlp([obs_dim] + list(hidden_sizes) + [act_dim],
                              activation)
         if not var:
-            self.logstd = nn.Parameter(torch.rand(self.act_dim, dtype=torch.float32))
+            self.logstd = nn.Parameter(torch.zeros(self.act_dim, dtype=torch.float32))
         else:
             self.logstd = torch.full((act_dim,), np.log(var))
 
     def _distribution(self, obs):
         batch_mean = self.mean_net(obs)
+        scale_tril = torch.diag(torch.exp(self.logstd))
+        action_distribution = MultivariateNormal(
+            batch_mean,
+            scale_tril=scale_tril,
+        )
+
+        return action_distribution
+
+    def _log_prob_from_distribution(self, pi, act):
+        return pi.log_prob(act)
+
+class MLPGaussianTanhActor(Actor):
+
+    def __init__(self,
+                 obs_dim,
+                 act_dim,
+                 hidden_sizes,
+                 activation,
+                 var=None,
+                 action_low=None,
+                 action_high=None,
+                 **kwargs):
+
+        super().__init__()
+        if action_high is not None and action_low is not None:
+            self.a_range = (action_high - action_low) / 2
+            self.a_mid = (action_high + action_low) / 2
+        else:
+            self.a_range = 1
+            self.a_mid = 0
+
+        # Initialize Gaussian Parameters and Network Architecture
+        self.act_dim = act_dim
+        self.mean_net = mlp([obs_dim] + list(hidden_sizes) + [act_dim],
+                             activation, output_activation=nn.Tanh)
+        if not var:
+            self.logstd = nn.Parameter(torch.zeros(self.act_dim, dtype=torch.float32))
+        else:
+            self.logstd = torch.full((act_dim,), np.log(var))
+
+    def _distribution(self, obs):
+        batch_mean = self.mean_net(obs)
+        batch_mean = batch_mean * torch.Tensor(self.a_range) + torch.Tensor(self.a_mid)
         scale_tril = torch.diag(torch.exp(self.logstd))
         action_distribution = MultivariateNormal(
             batch_mean,
@@ -151,8 +194,6 @@ class DIAYNDisc(nn.Module):
 
     def _log_prob_from_distribution(self, pi, skill):
         return pi.log_prob(skill)
-
-
 
 class MLPActorCritic(nn.Module):
 
@@ -209,8 +250,67 @@ class MLPActorCritic(nn.Module):
                 a_range = (self.action_high - self.action_low) / 2
                 a_mid = (self.action_high + self.action_low) / 2
                 a = torch.tanh(u) * a_range + a_mid
-                logp_a = self.pi._log_prob_from_distribution(pi, u) - torch.sum(a_range * (1 - torch.tanh(u) * torch.tanh(u)))
+                logp_a = self.pi._log_prob_from_distribution(pi, u) - torch.sum(torch.log(a_range * (1 - torch.tanh(u) * torch.tanh(u))))
 
+            v = self.v(obs)
+
+        return np.array(a), v.numpy(), logp_a.numpy()
+
+    def act(self, obs):
+        return self.step(obs)[0]
+
+# similar to nikhil barhate
+class MLPTanhActorCritic(nn.Module):
+
+    def __init__(self,
+                 observation_space,
+                 action_space,
+                 hidden_sizes=(64,64),
+                 activation=nn.Tanh,
+                 action_low = None,
+                 action_high = None):
+
+        super().__init__()
+
+        obs_dim = observation_space.shape[0]
+
+        if action_low is not None and action_high is not None:
+            self.action_low = torch.from_numpy(action_low)
+            self.action_high = torch.from_numpy(action_high)
+
+        if isinstance(action_space, Box):
+            act_dim = action_space.shape[0]
+            self.is_discrete = False
+            self.pi = MLPGaussianTanhActor(obs_dim,
+                                       act_dim,
+                                       hidden_sizes,
+                                       activation,
+                                       action_low=action_low,
+                                       action_high=action_high
+                                       )
+
+        # Use Categorical Actor if action space is Discrete
+        elif isinstance(action_space, Discrete):
+            self.is_discrete = True
+            self.pi = MLPCategoricalActor(obs_dim, action_space.n, hidden_sizes, activation)
+
+        # build value function
+        self.v  = MLPCritic(obs_dim, hidden_sizes, activation)
+
+    def step(self, obs, deterministic=False):
+        with torch.no_grad():
+            pi = self.pi._distribution(obs)
+
+            if deterministic and not self.is_discrete:
+                u = pi.mean
+            elif deterministic:
+                values = pi.enumerate_support()
+                u = values[torch.argmax(torch.tensor([pi.log_prob(act) for act in values]))]
+            else:
+                u = pi.sample()
+
+            a = u
+            logp_a = self.pi._log_prob_from_distribution(pi, u)
             v = self.v(obs)
 
         return np.array(a), v.numpy(), logp_a.numpy()

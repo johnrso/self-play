@@ -18,118 +18,17 @@ def ppo(env_fn,
         steps_per_epoch=4000,
         epochs=50,
         gamma=0.99,
-        clip_ratio=0.2,
+        clip_ratio=0.3,
         pi_lr=1e-3,
-        vf_lr=5e-3,
-        train_pi_iters=100,
-        train_v_iters=100,
+        vf_lr=1e-3,
+        train_pi_iters=20,
+        train_v_iters=20,
         lam=0.97,
         max_ep_len=250,
         target_kl=0.05,
         logger_kwargs=dict(),
         save_freq=10):
-    """
-    Proximal Policy Optimization (by clipping),
 
-    with early stopping based on approximate KL
-
-    Args:
-        env_fn : A function which creates a copy of the environment.
-            The environment must satisfy the OpenAI Gym API.
-
-        actor_critic: The constructor method for a PyTorch Module with a
-            ``step`` method, an ``act`` method, a ``pi`` module, and a ``v``
-            module. The ``step`` method should accept a batch of observations
-            and return:
-
-            ===========  ================  ======================================
-            Symbol       Shape             Description
-            ===========  ================  ======================================
-            ``a``        (batch, act_dim)  | Numpy array of actions for each
-                                           | observation.
-            ``v``        (batch,)          | Numpy array of value estimates
-                                           | for the provided observations.
-            ``logp_a``   (batch,)          | Numpy array of log probs for the
-                                           | actions in ``a``.
-            ===========  ================  ======================================
-
-            The ``act`` method behaves the same as ``step`` but only returns ``a``.
-
-            The ``pi`` module's forward call should accept a batch of
-            observations and optionally a batch of actions, and return:
-
-            ===========  ================  ======================================
-            Symbol       Shape             Description
-            ===========  ================  ======================================
-            ``pi``       N/A               | Torch Distribution object, containing
-                                           | a batch of distributions describing
-                                           | the policy for the provided observations.
-            ``logp_a``   (batch,)          | Optional (only returned if batch of
-                                           | actions is given). Tensor containing
-                                           | the log probability, according to
-                                           | the policy, of the provided actions.
-                                           | If actions not given, will contain
-                                           | ``None``.
-            ===========  ================  ======================================
-
-            The ``v`` module's forward call should accept a batch of observations
-            and return:
-
-            ===========  ================  ======================================
-            Symbol       Shape             Description
-            ===========  ================  ======================================
-            ``v``        (batch,)          | Tensor containing the value estimates
-                                           | for the provided observations. (Critical:
-                                           | make sure to flatten this!)
-            ===========  ================  ======================================
-
-
-        ac_kwargs (dict): Any kwargs appropriate for the ActorCritic object
-            you provided to PPO.
-
-        seed (int): Seed for random number generators.
-
-        steps_per_epoch (int): Number of steps of interaction (state-action pairs)
-            for the agent and the environment in each epoch.
-
-        epochs (int): Number of epochs of interaction (equivalent to
-            number of policy updates) to perform.
-
-        gamma (float): Discount factor. (Always between 0 and 1.)
-
-        clip_ratio (float): Hyperparameter for clipping in the policy objective.
-            Roughly: how far can the new policy go from the old policy while
-            still profiting (improving the objective function)? The new policy
-            can still go farther than the clip_ratio says, but it doesn't help
-            on the objective anymore. (Usually small, 0.1 to 0.3.) Typically
-            denoted by :math:`\epsilon`.
-
-        pi_lr (float): Learning rate for policy optimizer.
-
-        vf_lr (float): Learning rate for value function optimizer.
-
-        train_pi_iters (int): Maximum number of gradient descent steps to take
-            on policy loss per epoch. (Early stopping may cause optimizer
-            to take fewer than this.)
-
-        train_v_iters (int): Number of gradient descent steps to take on
-            value function per epoch.
-
-        lam (float): Lambda for GAE-Lambda. (Always between 0 and 1,
-            close to 1.)
-
-        max_ep_len (int): Maximum length of trajectory / episode / rollout.
-
-        target_kl (float): Roughly what KL divergence we think is appropriate
-            between new and old policies after an update. This will get used
-            for early stopping. (Usually small, 0.01 or 0.05.)
-
-        logger_kwargs (dict): Keyword args for EpochLogger.
-
-        save_freq (int): How often (in terms of gap between epochs) to save
-            the current policy and value function.
-
-    """
     # Random seed
     torch.manual_seed(seed)
     np.random.seed(seed)
@@ -142,21 +41,21 @@ def ppo(env_fn,
     if isinstance(env.action_space, Box):
         action_low = env.action_space.low
         action_high = env.action_space.high
-        print(action_low, action_high)
     else:
         action_low = action_high = None
 
     # Create actor-critic module
-    ac = actor_critic(env.observation_space,
-                      env.action_space,
-                      action_low=action_low,
-                      action_high=action_high,
-                      **ac_kwargs)
+    alice = actor_critic(env.observation_space,
+                         env.action_space,
+                         action_low=action_low,
+                         action_high=action_high,
+                         **ac_kwargs)
 
-    # Count variables
-    logger = EpochLogger(**logger_kwargs)
-    var_counts = tuple(core.count_vars(module) for module in [ac.pi, ac.v])
-    logger.log('\nNumber of parameters: \t pi: %d, \t v: %d\n'%var_counts)
+    bob = actor_critic(env.observation_space,
+                       env.action_space,
+                       action_low=action_low,
+                       action_high=action_high,
+                       **ac_kwargs)
 
     # Set up experience buffer
     local_steps_per_epoch = steps_per_epoch
@@ -206,21 +105,20 @@ def ppo(env_fn,
             loss_pi, pi_info = compute_loss_pi(data)
             kl = pi_info['kl']
 
-            # if kl > target_kl:
-            #     logger.log('Early stopping at step %d due to reaching max kl.'%i)
-            #     break
+            vf_optimizer.zero_grad()
+            loss_v = compute_loss_v(data)
+
+            if kl > target_kl:
+                logger.log('Early stopping at step %d due to reaching max kl.'%i)
+                break
+
+            loss_v.backward()
+            vf_optimizer.step()
 
             loss_pi.backward()
             pi_optimizer.step()
 
         logger.store(StopIter=i)
-
-        # Value function learning
-        for j in range(train_v_iters):
-            vf_optimizer.zero_grad()
-            loss_v = compute_loss_v(data)
-            loss_v.backward()
-            vf_optimizer.step()
 
         # Log changes from update
         kl, ent, cf = pi_info['kl'], pi_info_old['ent'], pi_info['cf']
@@ -242,7 +140,7 @@ def ppo(env_fn,
     for epoch in range(1, epochs + 1):
         for t in range(local_steps_per_epoch):
             a, v, logp = ac.step(torch.as_tensor(o, dtype=torch.float32))
-            if epoch % 50 == 0: env.render()
+
             next_o, r, d, _ = env.step(a)
             ep_ret += r
             ep_len += 1
@@ -299,13 +197,13 @@ def ppo(env_fn,
 if __name__ == '__main__':
     import argparse
     parser = argparse.ArgumentParser()
-    parser.add_argument('--env', type=str, default='LunarLander-v2')
+    parser.add_argument('--env', type=str, default='MountainCarContinuous-v0')
     parser.add_argument('--hid', type=int, default=64)
     parser.add_argument('--l', type=int, default=2)
     parser.add_argument('--gamma', type=float, default=0.99)
     parser.add_argument('--seed', '-s', type=int, default=0)
     parser.add_argument('--cpu', type=int, default=4)
-    parser.add_argument('--steps', type=int, default=4000)
+    parser.add_argument('--steps', type=int, default=1000)
     parser.add_argument('--epochs', type=int, default=100)
     parser.add_argument('--exp_name', type=str, default='ppo')
     args = parser.parse_args()
@@ -313,7 +211,7 @@ if __name__ == '__main__':
     from spinup.utils.run_utils import setup_logger_kwargs
     logger_kwargs = setup_logger_kwargs(args.exp_name, args.seed)
 
-    ppo(lambda : gym.make(args.env), actor_critic=core.MLPTanhActorCritic,
+    ppo(lambda : gym.make(args.env), actor_critic=core.MLPActorCritic,
         ac_kwargs=dict(hidden_sizes=[args.hid]*args.l), gamma=args.gamma,
         seed=args.seed, steps_per_epoch=args.steps, epochs=args.epochs,
         logger_kwargs=logger_kwargs)
