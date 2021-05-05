@@ -20,12 +20,12 @@ def ppo(env_fn,
         gamma=0.99,
         clip_ratio=0.2,
         pi_lr=1e-3,
-        vf_lr=5e-3,
-        train_pi_iters=100,
-        train_v_iters=100,
+        vf_lr=1e-3,
+        train_pi_iters=80,
+        train_v_iters=80,
         lam=0.97,
         max_ep_len=250,
-        target_kl=0.05,
+        target_kl=0.01,
         logger_kwargs=dict(),
         save_freq=10):
     """
@@ -206,9 +206,9 @@ def ppo(env_fn,
             loss_pi, pi_info = compute_loss_pi(data)
             kl = pi_info['kl']
 
-            # if kl > target_kl:
-            #     logger.log('Early stopping at step %d due to reaching max kl.'%i)
-            #     break
+            if kl > target_kl:
+                logger.log('Early stopping at step %d due to reaching max kl.'%i)
+                break
 
             loss_pi.backward()
             pi_optimizer.step()
@@ -313,7 +313,7 @@ if __name__ == '__main__':
     from spinup.utils.run_utils import setup_logger_kwargs
     logger_kwargs = setup_logger_kwargs(args.exp_name, args.seed)
 
-    ppo(lambda : gym.make(args.env), actor_critic=core.MLPTanhActorCritic,
+    ppo(lambda : gym.make(args.env), actor_critic=core.MLPActorCritic,
         ac_kwargs=dict(hidden_sizes=[args.hid]*args.l), gamma=args.gamma,
         seed=args.seed, steps_per_epoch=args.steps, epochs=args.epochs,
         logger_kwargs=logger_kwargs)

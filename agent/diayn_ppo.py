@@ -1,236 +1,243 @@
-import torch
-import torch.nn as nn
-from torch.distributions import MultivariateNormal
-import gym
+import time
+
 import numpy as np
+import torch
+from torch.optim import Adam
 
-from simple_core import *
-from buffer import *
-device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+import gym
+from gym.spaces import Box, Discrete
 
-class Flow_ActorCritic(nn.Module):
-    def __init__(self,
-                 observation_space,
-                 action_space,
-                 hidden_sizes=(64,64),
-                 activation=nn.Tanh,
-                 action_low = None,
-                 action_high = None):
+import simple_core as core
+from buffer import DIAYNBuffer
+from spinup.utils.logx import EpochLogger
 
-        super().__init__()
+def ppo(env_fn,
+        actor_critic=core.MLPActorCritic,
+        ac_kwargs=dict(),
+        seed=0,
+        steps_per_epoch=4000,
+        epochs=50,
+        gamma=0.99,
+        clip_ratio=0.2,
+        pi_lr=1e-3,
+        vf_lr=1e-3,
+        train_pi_iters=80,
+        train_v_iters=80,
+        lam=0.97,
+        max_ep_len=250,
+        target_kl=0.01,
+        logger_kwargs=dict(),
+        save_freq=10,
+        num_skills=10,
+        alpha=.01):
 
-        obs_dim = observation_space.shape[0]
+    # Random seed
+    torch.manual_seed(seed)
+    np.random.seed(seed)
 
-        if action_low is not None and action_high is not None:
-            self.action_low = torch.from_numpy(action_low)
-            self.action_high = torch.from_numpy(action_high)
+    # Instantiate environment
+    env = env_fn()
+    obs_dim = env.observation_space.shape
+    act_dim = env.action_space.shape
 
-        if isinstance(action_space, Box):
-            act_dim = action_space.shape[0]
-            self.is_discrete = False
-            self.pi = MLPGaussianActor(obs_dim,
-                                       act_dim,
-                                       hidden_sizes,
-                                       activation
-                                       )
+    if isinstance(env.action_space, Box):
+        action_low = env.action_space.low
+        action_high = env.action_space.high
+        print(action_low, action_high)
+    else:
+        action_low = action_high = None
 
-        # Use Categorical Actor if action space is Discrete
-        elif isinstance(action_space, Discrete):
-            self.is_discrete = True
-            self.pi = MLPCategoricalActor(obs_dim, action_space.n, hidden_sizes, activation)
+    skills = np.arange(num_skills)
 
-        # build value function
-        self.v  = MLPCritic(obs_dim, hidden_sizes, activation)
+    q_phi = core.DIAYNDisc(env.observation_space.shape[0],
+                           num_skills,
+                           **ac_kwargs)
 
-    def step(self, obs, deterministic=False):
-        with torch.no_grad():
-            pi = self.pi._distribution(obs)
+    # Create actor-critic module
+    ac = actor_critic(env.observation_space,
+                      env.action_space,
+                      action_low=action_low,
+                      action_high=action_high,
+                      **ac_kwargs)
 
-            if deterministic and not self.is_discrete:
-                u = pi.mean
-            elif deterministic:
-                values = pi.enumerate_support()
-                u = values[torch.argmax(torch.tensor([pi.log_prob(act) for act in values]))]
-            else:
-                u = pi.sample()
+    # Count variables
+    logger = EpochLogger(**logger_kwargs)
+    var_counts = tuple(core.count_vars(module) for module in [ac.pi, ac.v])
+    logger.log('\nNumber of parameters: \t pi: %d, \t v: %d\n'%var_counts)
 
-            if self.is_discrete:
-                a = u
-                logp_a = self.pi._log_prob_from_distribution(pi, u)
-            else:
-                # flow trick as described in SAC paper appendix C
-                a_range = (self.action_high - self.action_low) / 2
-                a_mid = (self.action_high + self.action_low) / 2
-                a = torch.tanh(u) * a_range + a_mid
-                logp_a = self.pi._log_prob_from_distribution(pi, u) - torch.sum(a_range * (1 - torch.tanh(u) * torch.tanh(u)))
+    # Set up experience buffer
+    local_steps_per_epoch = steps_per_epoch
+    buf = DIAYNBuffer(obs_dim, act_dim, local_steps_per_epoch, gamma, lam)
 
-            v = self.v(obs)
+    # Set up function for computing PPO policy loss
+    def compute_loss_pi(data):
+        obs, act, adv, logp_old = data['obs'], data['act'], data['adv'], data['logp']
 
-        return np.array(a), v.numpy(), logp_a.numpy()
+        # Policy loss
+        pi, logp = ac.pi(obs, act)
+        ratio = torch.exp(logp - logp_old)
+        clip_adv = torch.clamp(ratio, 1-clip_ratio, 1+clip_ratio) * adv
+        loss_pi = -(torch.min(ratio * adv, clip_adv)).mean()
 
-    def act(self, state, memory):
-        action, value, action_logprob = self.step(obs)
+        # Useful extra info
+        approx_kl = (logp_old - logp).mean().item()
+        ent = pi.entropy().mean().item()
+        clipped = ratio.gt(1+clip_ratio) | ratio.lt(1-clip_ratio)
+        clipfrac = torch.as_tensor(clipped, dtype=torch.float32).mean().item()
+        pi_info = dict(kl=approx_kl, ent=ent, cf=clipfrac)
 
-        memory.states.append(state)
-        memory.actions.append(action)
-        memory.logprobs.append(action_logprob)
+        return loss_pi, pi_info
 
-        return action
+    # Set up function for computing value loss
+    def compute_loss_v(data):
+        obs, ret = data['obs'], data['ret']
+        return ((ac.v(obs) - ret)**2).mean()
 
-    def evaluate(self, state, action):
-        dist = self.pi._distribution(obs)
+    # Set up optimizers for policy and value function
+    pi_optimizer = Adam(ac.pi.parameters(), lr=pi_lr)
+    vf_optimizer = Adam(ac.v.parameters(), lr=vf_lr)
 
-        action_logprobs = dist.log_prob(action)
-        dist_entropy = dist.entropy()
-        state_value = self.v(state)
+    # Set up model saving
+    logger.setup_pytorch_saver(ac)
 
-        return action_logprobs, torch.squeeze(state_value), dist_entropy
+    def update():
+        data = buf.get()
 
-class PPO:
-    def __init__(self, state_dim, action_dim, action_std, lr, betas, gamma, K_epochs, eps_clip):
-        self.lr = lr
-        self.betas = betas
-        self.gamma = gamma
-        self.eps_clip = eps_clip
-        self.K_epochs = K_epochs
+        pi_l_old, pi_info_old = compute_loss_pi(data)
+        pi_l_old = pi_l_old.item()
+        v_l_old = compute_loss_v(data).item()
 
-        self.policy = ActorCritic(state_dim, action_dim, action_std).to(device)
-        self.optimizer = torch.optim.Adam(self.policy.parameters(), lr=lr, betas=betas)
+        # Train policy with multiple steps of gradient descent
+        for i in range(train_pi_iters):
+            pi_optimizer.zero_grad()
+            loss_pi, pi_info = compute_loss_pi(data)
+            kl = pi_info['kl']
 
-        self.policy_old = ActorCritic(state_dim, action_dim, action_std).to(device)
-        self.policy_old.load_state_dict(self.policy.state_dict())
-
-        self.MseLoss = nn.MSELoss()
-
-    def select_action(self, state, memory):
-        state = torch.FloatTensor(state.reshape(1, -1)).to(device)
-        return self.policy_old.act(state, memory).cpu().data.numpy().flatten()
-
-    def update(self, memory):
-        # Monte Carlo estimate of rewards:
-        rewards = []
-        discounted_reward = 0
-        for reward, is_terminal in zip(reversed(memory.rewards), reversed(memory.is_terminals)):
-            if is_terminal:
-                discounted_reward = 0
-            discounted_reward = reward + (self.gamma * discounted_reward)
-            rewards.insert(0, discounted_reward)
-
-        # Normalizing the rewards:
-        rewards = torch.tensor(rewards, dtype=torch.float32).to(device)
-        rewards = (rewards - rewards.mean()) / (rewards.std() + 1e-5)
-
-        # convert list to tensor
-        old_states = torch.squeeze(torch.stack(memory.states).to(device), 1).detach()
-        old_actions = torch.squeeze(torch.stack(memory.actions).to(device), 1).detach()
-        old_logprobs = torch.squeeze(torch.stack(memory.logprobs), 1).to(device).detach()
-
-        # Optimize policy for K epochs:
-        for _ in range(self.K_epochs):
-            # Evaluating old actions and values :
-            logprobs, state_values, dist_entropy = self.policy.evaluate(old_states, old_actions)
-
-            # Finding the ratio (pi_theta / pi_theta__old):
-            ratios = torch.exp(logprobs - old_logprobs.detach())
-
-            # Finding Surrogate Loss:
-            advantages = rewards - state_values.detach()
-            surr1 = ratios * advantages
-            surr2 = torch.clamp(ratios, 1-self.eps_clip, 1+self.eps_clip) * advantages
-            loss = -torch.min(surr1, surr2) + 0.5*self.MseLoss(state_values, rewards) - 0.01*dist_entropy
-
-            # take gradient step
-            self.optimizer.zero_grad()
-            loss.mean().backward()
-            self.optimizer.step()
-
-        # Copy new weights into old policy:
-        self.policy_old.load_state_dict(self.policy.state_dict())
-
-def main():
-    ############## Hyperparameters ##############
-    env_name = "LunarLanderContinuous-v2"
-    render = True
-    solved_reward = 200         # stop training if avg_reward > solved_reward
-    log_interval = 20           # print avg reward in the interval
-    max_episodes = 10000        # max training episodes
-    max_timesteps = 1500        # max timesteps in one episode
-
-    update_timestep = 4000      # update policy every n timesteps
-    action_std = 0.5            # constant std for action distribution (Multivariate Normal)
-    K_epochs = 80               # update policy for K epochs
-    eps_clip = 0.2              # clip parameter for PPO
-    gamma = 0.99                # discount factor
-
-    lr = 0.0003                 # parameters for Adam optimizer
-    betas = (0.9, 0.999)
-
-    random_seed = None
-    #############################################
-
-    # creating environment
-    env = gym.make(env_name)
-    state_dim = env.observation_space.shape[0]
-    action_dim = env.action_space.shape[0]
-
-    if random_seed:
-        print("Random Seed: {}".format(random_seed))
-        torch.manual_seed(random_seed)
-        env.seed(random_seed)
-        np.random.seed(random_seed)
-
-    memory = Memory()
-    ppo = PPO(state_dim, action_dim, action_std, lr, betas, gamma, K_epochs, eps_clip)
-
-    # logging variables
-    running_reward = 0
-    avg_length = 0
-    time_step = 0
-
-    # training loop
-    for i_episode in range(1, max_episodes+1):
-        state = env.reset()
-        for t in range(max_timesteps):
-            time_step +=1
-            # Running policy_old:
-            action = ppo.select_action(state, memory)
-            state, reward, done, _ = env.step(action)
-
-            # Saving reward and is_terminals:
-            memory.rewards.append(reward)
-            memory.is_terminals.append(done)
-
-            # update if its time
-            if time_step % update_timestep == 0:
-                ppo.update(memory)
-                memory.clear_memory()
-                time_step = 0
-            running_reward += reward
-            if render:
-                env.render()
-            if done:
+            if kl > target_kl:
+                logger.log('Early stopping at step %d due to reaching max kl.'%i)
                 break
 
-        avg_length += t
+            loss_pi.backward()
+            pi_optimizer.step()
 
-        # stop training if avg_reward > solved_reward
-        if running_reward > (log_interval*solved_reward):
-            print("########## Solved! ##########")
-            torch.save(ppo.policy.state_dict(), './PPO_continuous_solved_{}.pth'.format(env_name))
-            break
+        logger.store(StopIter=i)
 
-        # save every 500 episodes
-        if i_episode % 500 == 0:
-            torch.save(ppo.policy.state_dict(), './PPO_continuous_{}.pth'.format(env_name))
+        # Value function learning
+        for j in range(train_v_iters):
+            vf_optimizer.zero_grad()
+            loss_v = compute_loss_v(data)
+            loss_v.backward()
+            vf_optimizer.step()
 
-        # logging
-        if i_episode % log_interval == 0:
-            avg_length = int(avg_length/log_interval)
-            running_reward = int((running_reward/log_interval))
+        # Log changes from update
+        kl, ent, cf = pi_info['kl'], pi_info_old['ent'], pi_info['cf']
+        logger.store(LossPi=pi_l_old,
+                     LossV=v_l_old,
+                     KL=kl,
+                     Entropy=ent,
+                     ClipFrac=cf,
+                     DeltaLossPi=(loss_pi.item() - pi_l_old),
+                     DeltaLossV=(loss_v.item() - v_l_old))
 
-            print('Episode {} \t Avg length: {} \t Avg reward: {}'.format(i_episode, avg_length, running_reward))
-            running_reward = 0
-            avg_length = 0
+    # Prepare for interaction with environment
+    start_time = time.time()
+    o, ep_ret, ep_len = env.reset(), 0, 0
+
+    env.reset()
+    s = np.random.choice(skills)
+    o = torch.cat((torch.Tensor(o), torch.Tensor([s])))
+    
+
+    # Main loop: collect experience in env and update/log each epoch
+    for epoch in range(1, epochs + 1):
+        for t in range(local_steps_per_epoch):
+            a, v, logp = ac.step(torch.as_tensor(o, dtype=torch.float32))
+
+            # replace reward with pseudoreward:
+            next_o, _, d, _ = env.step(a)
+            next_o = torch.Tensor(next_o)
+            q_dist = q_phi._distribution(next_o)
+            next_o = torch.cat((next_o, torch.Tensor([s])))
+            logp_s = q_phi._log_prob_from_distribution(q_dist, torch.Tensor(s))
+            dist = ac.pi._distribution(next_o)
+
+            # print(logp_s)
+
+            r = dist.entropy() * alpha # + logp_s # - entropy of uniform
+            # print(r)
+            if epoch % 50 == 0: env.render()
+            ep_ret += r
+            ep_len += 1
+
+            # save and log
+            buf.store(o, a, r, v, logp)
+            logger.store(VVals=v)
+
+            # Update obs (critical!)
+            o = next_o
+
+            timeout = ep_len == max_ep_len
+            terminal = d or timeout
+            epoch_ended = t==local_steps_per_epoch-1
+
+            if terminal or epoch_ended:
+                if epoch_ended and not(terminal):
+                    print('Warning: trajectory cut off by epoch at %d steps.'%ep_len, flush=True)
+                # if trajectory didn't reach terminal state, bootstrap value target
+                if timeout or epoch_ended:
+                    _, v, _ = ac.step(torch.as_tensor(o, dtype=torch.float32))
+                else:
+                    v = 0
+                buf.finish_path(v)
+                if terminal:
+                    # only save EpRet / EpLen if trajectory finished
+                    logger.store(EpRet=ep_ret, EpLen=ep_len)
+                o, ep_ret, ep_len = env.reset(), 0, 0
+                s = np.random.choice(skills)
+                print("current skill: {}".format(s))
+
+        # Save model
+        if (epoch % save_freq == 0) or (epoch == epochs-1):
+            logger.save_state({'env': env}, None)
+
+        # Perform PPO update!
+        update()
+
+        # Log info about epoch
+        logger.log_tabular('Epoch', epoch)
+        logger.log_tabular('EpRet', with_min_and_max=True)
+        logger.log_tabular('EpLen', average_only=True)
+        logger.log_tabular('VVals', with_min_and_max=True)
+        logger.log_tabular('TotalEnvInteracts', (epoch+1)*steps_per_epoch)
+        logger.log_tabular('LossPi', average_only=True)
+        logger.log_tabular('LossV', average_only=True)
+        logger.log_tabular('DeltaLossPi', average_only=True)
+        logger.log_tabular('DeltaLossV', average_only=True)
+        logger.log_tabular('Entropy', average_only=True)
+        logger.log_tabular('KL', average_only=True)
+        logger.log_tabular('ClipFrac', average_only=True)
+        logger.log_tabular('StopIter', average_only=True)
+        logger.log_tabular('Time', time.time()-start_time)
+        logger.dump_tabular()
 
 if __name__ == '__main__':
-    main()
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--env', type=str, default='LunarLander-v2')
+    parser.add_argument('--hid', type=int, default=64)
+    parser.add_argument('--l', type=int, default=2)
+    parser.add_argument('--gamma', type=float, default=0.99)
+    parser.add_argument('--seed', '-s', type=int, default=0)
+    parser.add_argument('--cpu', type=int, default=4)
+    parser.add_argument('--steps', type=int, default=4000)
+    parser.add_argument('--epochs', type=int, default=100)
+    parser.add_argument('--exp_name', type=str, default='ppo')
+    args = parser.parse_args()
+
+    from spinup.utils.run_utils import setup_logger_kwargs
+    logger_kwargs = setup_logger_kwargs(args.exp_name, args.seed)
+
+    ppo(lambda : gym.make(args.env), actor_critic=core.DIAYNActorCritic,
+        ac_kwargs=dict(hidden_sizes=[args.hid]*args.l), gamma=args.gamma,
+        seed=args.seed, steps_per_epoch=args.steps, epochs=args.epochs,
+        logger_kwargs=logger_kwargs)

@@ -155,10 +155,11 @@ def diayn(env_fn,
     skills = np.arange(num_skills)
 
     # Create actor-critic module
-    ac = actor_critic(env.observation_space + 1,
+    ac = actor_critic(env.observation_space,
                       env.action_space,
                       action_low=action_low,
                       action_high=action_high,
+                      activation=nn.Tanh
                       **ac_kwargs)
 
     # skill discriminator
@@ -312,6 +313,9 @@ def diayn(env_fn,
         logger.log_tabular('Time', time.time()-start_time)
         logger.dump_tabular()
 
+    # visualize skills:
+
+
 if __name__ == '__main__':
     import argparse
     parser = argparse.ArgumentParser()
@@ -329,7 +333,7 @@ if __name__ == '__main__':
     from spinup.utils.run_utils import setup_logger_kwargs
     logger_kwargs = setup_logger_kwargs(args.exp_name, args.seed)
 
-    ppo(lambda : gym.make(args.env), actor_critic=core.MLPActorCritic,
+    diayn(lambda : gym.make(args.env), actor_critic=core.MLPActorCritic,
         ac_kwargs=dict(hidden_sizes=[args.hid]*args.l), gamma=args.gamma,
         seed=args.seed, steps_per_epoch=args.steps, epochs=args.epochs,
         logger_kwargs=logger_kwargs)

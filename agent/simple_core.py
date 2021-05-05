@@ -84,6 +84,8 @@ class MLPGaussianActor(Actor):
                  hidden_sizes,
                  activation,
                  var=None,
+                 action_low=None,
+                 action_high=None,
                  **kwargs):
 
         super().__init__()
@@ -110,6 +112,48 @@ class MLPGaussianActor(Actor):
     def _log_prob_from_distribution(self, pi, act):
         return pi.log_prob(act)
 
+class MLPGaussianSquashActor(Actor):
+
+    def __init__(self,
+                 obs_dim,
+                 act_dim,
+                 hidden_sizes,
+                 activation,
+                 var=None,
+                 action_low=None,
+                 action_high=None,
+                 **kwargs):
+
+        super().__init__()
+        if action_high is not None and action_low is not None:
+            self.a_range = (action_high - action_low) / 2
+            self.a_mid = (action_high + action_low) / 2
+        else:
+            self.a_range = None
+            self.a_mid = None
+        # Initialize Gaussian Parameters and Network Architecture
+        self.act_dim = act_dim
+        self.mean_net = mlp([obs_dim] + list(hidden_sizes) + [act_dim],
+                             activation)
+        if not var:
+            self.logstd = nn.Parameter(torch.zeros(self.act_dim, dtype=torch.float32))
+        else:
+            self.logstd = torch.full((act_dim,), np.log(var))
+
+    def _distribution(self, obs):
+        batch_mean = self.mean_net(obs)
+        scale_tril = torch.diag(torch.exp(self.logstd))
+        action_distribution = MultivariateNormal(
+            batch_mean,
+            scale_tril=scale_tril,
+        )
+
+        return action_distribution
+
+    def _log_prob_from_distribution(self, pi, act):
+        u = torch.atanh((act - self.a_mid) / self.a_range)
+        return pi.log_prob(u) # - torch.sum(torch.log(torch.Tensor(self.a_range) * (1 - torch.tanh(u) * torch.tanh(u))))
+
 class MLPGaussianTanhActor(Actor):
 
     def __init__(self,
@@ -127,8 +171,8 @@ class MLPGaussianTanhActor(Actor):
             self.a_range = (action_high - action_low) / 2
             self.a_mid = (action_high + action_low) / 2
         else:
-            self.a_range = 1
-            self.a_mid = 0
+            self.a_range = None
+            self.a_mid = None
 
         # Initialize Gaussian Parameters and Network Architecture
         self.act_dim = act_dim
@@ -162,31 +206,16 @@ class MLPCritic(nn.Module):
     def forward(self, obs):
         return torch.squeeze(self.v_net(obs), -1) # Critical to ensure v has right shape.
 
-class MLPQFunction(nn.Module):
-
-    def __init__(self,
-                 obs_dim,
-                 act_dim,
-                 hidden_sizes,
-                 activation,
-                 input_norm=False):
-        super().__init__()
-        sizes = [obs_dim + act_dim] + list(hidden_sizes) + [1]
-        self.v_net = mlp(sizes, activation, input_norm=input_norm)
-
-    def forward(self, obs, act):
-        return torch.squeeze(self.v_net(torch.cat(obs, act)), -1) # Critical to ensure v has right shape.
-
 class DIAYNDisc(nn.Module):
     def __init__(self,
                  obs_dim,
                  num_skills,
-                 hidden_sizes,
-                 activation,
+                 hidden_sizes=(64,64),
+                 activation=nn.Tanh,
                  input_norm=False):
         super().__init__()
         sizes = [obs_dim] + list(hidden_sizes) + [num_skills]
-        self.logits_net = mlp(sizes, activation, input_norm=input_norm)
+        self.logits_net = mlp(sizes, activation)
 
     def _distribution(self, obs):
         logits = self.logits_net(obs)
@@ -216,11 +245,13 @@ class MLPActorCritic(nn.Module):
         if isinstance(action_space, Box):
             act_dim = action_space.shape[0]
             self.is_discrete = False
-            self.pi = MLPGaussianActor(obs_dim,
-                                       act_dim,
-                                       hidden_sizes,
-                                       activation
-                                       )
+            self.pi = MLPGaussianSquashActor(obs_dim,
+                                             act_dim,
+                                             hidden_sizes,
+                                             activation,
+                                             action_low=action_low,
+                                             action_high=action_high
+                                             )
 
         # Use Categorical Actor if action space is Discrete
         elif isinstance(action_space, Discrete):
@@ -244,14 +275,78 @@ class MLPActorCritic(nn.Module):
 
             if self.is_discrete:
                 a = u
-                logp_a = self.pi._log_prob_from_distribution(pi, u)
             else:
-                # flow trick as described in SAC paper appendix C
+                # flow trick as described in SAC paper appendix
                 a_range = (self.action_high - self.action_low) / 2
                 a_mid = (self.action_high + self.action_low) / 2
                 a = torch.tanh(u) * a_range + a_mid
-                logp_a = self.pi._log_prob_from_distribution(pi, u) - torch.sum(torch.log(a_range * (1 - torch.tanh(u) * torch.tanh(u))))
 
+            logp_a = self.pi._log_prob_from_distribution(pi, a)
+            v = self.v(obs)
+
+        return np.array(a), v.numpy(), logp_a.numpy()
+
+    def act(self, obs):
+        return self.step(obs)[0]
+
+class DIAYNActorCritic(nn.Module):
+
+    def __init__(self,
+                 observation_space,
+                 action_space,
+                 hidden_sizes=(64,64),
+                 activation=nn.Tanh,
+                 action_low = None,
+                 action_high = None):
+
+        super().__init__()
+
+        obs_dim = observation_space.shape[0] + 1
+
+        if action_low is not None and action_high is not None:
+            self.action_low = torch.from_numpy(action_low)
+            self.action_high = torch.from_numpy(action_high)
+
+        if isinstance(action_space, Box):
+            act_dim = action_space.shape[0]
+            self.is_discrete = False
+            self.pi = MLPGaussianSquashActor(obs_dim,
+                                             act_dim,
+                                             hidden_sizes,
+                                             activation,
+                                             action_low=action_low,
+                                             action_high=action_high
+                                             )
+
+        # Use Categorical Actor if action space is Discrete
+        elif isinstance(action_space, Discrete):
+            self.is_discrete = True
+            self.pi = MLPCategoricalActor(obs_dim, action_space.n, hidden_sizes, activation)
+
+        # build value function
+        self.v  = MLPCritic(obs_dim, hidden_sizes, activation)
+
+    def step(self, obs, deterministic=False):
+        with torch.no_grad():
+            pi = self.pi._distribution(obs)
+
+            if deterministic and not self.is_discrete:
+                u = pi.mean
+            elif deterministic:
+                values = pi.enumerate_support()
+                u = values[torch.argmax(torch.tensor([pi.log_prob(act) for act in values]))]
+            else:
+                u = pi.sample()
+
+            if self.is_discrete:
+                a = u
+            else:
+                # flow trick as described in SAC paper appendix
+                a_range = (self.action_high - self.action_low) / 2
+                a_mid = (self.action_high + self.action_low) / 2
+                a = torch.tanh(u) * a_range + a_mid
+
+            logp_a = self.pi._log_prob_from_distribution(pi, a)
             v = self.v(obs)
 
         return np.array(a), v.numpy(), logp_a.numpy()
